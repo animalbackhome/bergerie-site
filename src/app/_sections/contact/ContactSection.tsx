@@ -5,7 +5,11 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 type Props = {
-  hostEmail: string;
+  /**
+   * Email de réception. Optionnel : si non fourni,
+   * on prend NEXT_PUBLIC_HOST_EMAIL (Vercel) puis un fallback.
+   */
+  hostEmail?: string;
   airbnbCalendarUrl?: string;
 };
 
@@ -111,7 +115,14 @@ function nightlyRate(date: Date) {
   if (month === 9) return 250; // Septembre
 
   // Octobre (10) -> Mars (3)
-  if (month === 10 || month === 11 || month === 12 || month === 1 || month === 2 || month === 3)
+  if (
+    month === 10 ||
+    month === 11 ||
+    month === 12 ||
+    month === 1 ||
+    month === 2 ||
+    month === 3
+  )
     return 170;
 
   // Par défaut (au cas où) : 250
@@ -158,6 +169,12 @@ export default function ContactSection({
   hostEmail,
   airbnbCalendarUrl = "https://www.airbnb.fr/rooms/867121310852790122?guests=1&adults=1&s=67&unique_share_id=a77ffe87-87a5-4730-8e31-cebf52ed6508",
 }: Props) {
+  // ✅ IMPORTANT : composant client -> on ne peut lire que des env "NEXT_PUBLIC_*"
+  const resolvedHostEmail =
+    hostEmail ||
+    process.env.NEXT_PUBLIC_HOST_EMAIL ||
+    "contact@superbe-bergerie-foret-piscine-lac.com";
+
   const [draft, setDraft] = useState<Draft>({
     name: "",
     email: "",
@@ -184,15 +201,23 @@ export default function ContactSection({
     message: "",
   });
 
-  const nights = useMemo(() => diffNights(draft.startDate, draft.endDate), [draft.startDate, draft.endDate]);
+  const nights = useMemo(
+    () => diffNights(draft.startDate, draft.endDate),
+    [draft.startDate, draft.endDate]
+  );
 
-  const accommodation = useMemo(() => calcBaseAccommodation(draft.startDate, draft.endDate), [draft.startDate, draft.endDate]);
+  const accommodation = useMemo(
+    () => calcBaseAccommodation(draft.startDate, draft.endDate),
+    [draft.startDate, draft.endDate]
+  );
 
   const animalLabel = useMemo(() => {
     if (draft.animalsCount <= 0) return "—";
     if (draft.animalType === "chien") return `${draft.animalsCount} chien(s)`;
     if (draft.animalType === "chat") return `${draft.animalsCount} chat(s)`;
-    const other = draft.otherAnimalLabel.trim().length ? ` (${draft.otherAnimalLabel.trim()})` : "";
+    const other = draft.otherAnimalLabel.trim().length
+      ? ` (${draft.otherAnimalLabel.trim()})`
+      : "";
     return `${draft.animalsCount} autre(s)${other}`;
   }, [draft.animalsCount, draft.animalType, draft.otherAnimalLabel]);
 
@@ -211,7 +236,9 @@ export default function ContactSection({
     const e = parseISODateLocal(draft.endDate);
     if (!s || !e) return "—";
     const fmt = (d: Date) =>
-      d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }).replace(".", "");
+      d
+        .toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })
+        .replace(".", "");
     return `${fmt(s)} → ${fmt(e)} (${nights} nuit${nights > 1 ? "s" : ""})`;
   }, [draft.startDate, draft.endDate, nights]);
 
@@ -396,7 +423,7 @@ export default function ContactSection({
                       ].join("\n")
                     );
 
-                    window.location.href = `mailto:${hostEmail}?subject=${subject}&body=${body}`;
+                    window.location.href = `mailto:${resolvedHostEmail}?subject=${subject}&body=${body}`;
                   }}
                 >
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -741,9 +768,7 @@ export default function ContactSection({
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Animaux (10€/animal/nuit)
-                      </span>
+                      <span className="text-slate-600">Animaux (10€/animal/nuit)</span>
                       <span className="font-semibold text-slate-900">{formatEUR(pricing.animalsCost)}</span>
                     </div>
 
@@ -755,15 +780,14 @@ export default function ContactSection({
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Visiteurs ({draft.visitorsCount} x 50€)
-                      </span>
+                      <span className="text-slate-600">Visiteurs ({draft.visitorsCount} x 50€)</span>
                       <span className="font-semibold text-slate-900">{formatEUR(pricing.visitorsCost)}</span>
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-slate-600">
-                        Personnes en plus ({draft.extraSleepersCount} pers. x {pricing.extraNights} nuit{pricing.extraNights > 1 ? "s" : ""})
+                        Personnes en plus ({draft.extraSleepersCount} pers. x {pricing.extraNights} nuit
+                        {pricing.extraNights > 1 ? "s" : ""})
                       </span>
                       <span className="font-semibold text-slate-900">{formatEUR(pricing.extraSleepersCost)}</span>
                     </div>
@@ -779,9 +803,7 @@ export default function ContactSection({
                     </div>
 
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Taxe de séjour (3,93€/adulte/nuit)
-                      </span>
+                      <span className="text-slate-600">Taxe de séjour (3,93€/adulte/nuit)</span>
                       <span className="font-semibold text-slate-900">{formatEUR(pricing.touristTax)}</span>
                     </div>
 
