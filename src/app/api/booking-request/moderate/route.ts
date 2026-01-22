@@ -18,7 +18,6 @@ function verifySig(params: { id: string; action: string; exp: string; sig: strin
   const expNum = Number(params.exp);
   if (!Number.isFinite(expNum)) return false;
 
-  // expiration
   const now = Math.floor(Date.now() / 1000);
   if (expNum < now) return false;
 
@@ -27,37 +26,40 @@ function verifySig(params: { id: string; action: string; exp: string; sig: strin
   return expected === params.sig;
 }
 
+function redirectTo(origin: string, path: string) {
+  const res = NextResponse.redirect(new URL(path, origin), 302);
+  // évite qu’un webmail “cache” une ancienne réponse
+  res.headers.set("Cache-Control", "no-store");
+  return res;
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  const origin = url.origin;
+
   const id = url.searchParams.get("id") || "";
   const action = url.searchParams.get("action") || "";
   const exp = url.searchParams.get("exp") || "";
   const sig = url.searchParams.get("sig") || "";
 
-  // base du site (origin)
-  const origin = url.origin;
-
+  // Si lien incomplet ou invalide/expiré → on redirige vers "refused" (simple et propre)
   if (!id || !action || !exp || !sig) {
-    // page simple si lien incomplet
-    return NextResponse.redirect(new URL("/booking/refused", origin), 302);
+    return redirectTo(origin, "/booking/refused");
   }
-
   if (!verifySig({ id, action, exp, sig })) {
-    // lien invalide/expiré -> page refused (on pourrait faire une page "expired" plus tard)
-    return NextResponse.redirect(new URL("/booking/refused", origin), 302);
+    return redirectTo(origin, "/booking/refused");
   }
 
-  // Action -> update DB si besoin, puis redirect vers une page propre
   if (action === "accept") {
     const { error } = await supabaseAdmin
       .from("booking_requests")
       .update({ status: "accepted", moderated_at: new Date().toISOString() })
       .eq("id", id);
 
-    // même si erreur, on redirige vers refused (ça évite du JSON blanc)
-    if (error) return NextResponse.redirect(new URL("/booking/refused", origin), 302);
-
-    return NextResponse.redirect(new URL("/booking/accepted", origin), 302);
+    if (error) {
+      return redirectTo(origin, "/booking/refused");
+    }
+    return redirectTo(origin, "/booking/accepted");
   }
 
   if (action === "reject") {
@@ -66,15 +68,16 @@ export async function GET(req: Request) {
       .update({ status: "refused", moderated_at: new Date().toISOString() })
       .eq("id", id);
 
-    if (error) return NextResponse.redirect(new URL("/booking/refused", origin), 302);
-
-    return NextResponse.redirect(new URL("/booking/refused", origin), 302);
+    if (error) {
+      return redirectTo(origin, "/booking/refused");
+    }
+    return redirectTo(origin, "/booking/refused");
   }
 
   if (action === "reply") {
-    // “Répondre” = on ne change pas le statut
-    return NextResponse.redirect(new URL("/booking/reply", origin), 302);
+    // “Répondre” = ne change pas le statut, juste une page d’info.
+    return redirectTo(origin, "/booking/reply");
   }
 
-  return NextResponse.redirect(new URL("/booking/refused", origin), 302);
+  return redirectTo(origin, "/booking/refused");
 }
