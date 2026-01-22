@@ -5,10 +5,6 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 type Props = {
-  /**
-   * Email de réception. Optionnel : si non fourni,
-   * on prend NEXT_PUBLIC_HOST_EMAIL (Vercel) puis un fallback.
-   */
   hostEmail?: string;
   airbnbCalendarUrl?: string;
 };
@@ -22,18 +18,18 @@ type Draft = {
 
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD (checkout)
-  adults: number; // taxe de séjour
-  children: number; // -18 ans (exonérés)
+  adults: number;
+  children: number;
 
   animalType: AnimalType;
   otherAnimalLabel: string;
   animalsCount: number;
 
-  woodQuarterSteres: number; // 0..n (prix 40€ par 1/4 stère)
-  visitorsCount: number; // 50€/visiteur (one-shot)
+  woodQuarterSteres: number;
+  visitorsCount: number;
 
-  extraSleepersCount: number; // personnes en plus qui dorment
-  extraSleepersNights: number; // nombre de nuits pour ces personnes (<= nights)
+  extraSleepersCount: number;
+  extraSleepersNights: number;
 
   earlyArrival: boolean; // +70
   lateDeparture: boolean; // +70
@@ -47,7 +43,6 @@ function formatEUR(value: number) {
 }
 
 function parseISODateLocal(iso: string) {
-  // iso: YYYY-MM-DD => date locale à minuit
   const [y, m, d] = iso.split("-").map((n) => Number(n));
   if (!y || !m || !d) return null;
   return new Date(y, m - 1, d, 0, 0, 0, 0);
@@ -74,24 +69,6 @@ function dateKeyMMDD(date: Date) {
   return `${mm}-${dd}`;
 }
 
-/**
- * ✅ Tarifs donnés par toi :
- * - Septembre : 250€/nuit
- * - Octobre → Mars : 170€/nuit (sauf fêtes)
- * - Avril : 250€/nuit
- * - Mai : 300€/nuit
- * - Juin : 400€/nuit
- * - Juillet : 450€/nuit
- * - Août : 500€/nuit
- *
- * Fêtes (par nuit) :
- * - Noël (25/12) : 300€/nuit
- * - Veille de Noël (24/12) : 200€/nuit
- * - Lendemain de Noël (26/12) : 200€/nuit
- * - Jour de l’an (01/01) : 300€/nuit
- * - Veille du jour de l’an (31/12) : 200€/nuit
- * - Lendemain du jour de l’an (02/01) : 200€/nuit
- */
 function nightlyRate(date: Date) {
   const holidayRates: Record<string, number> = {
     "12-24": 200,
@@ -107,25 +84,15 @@ function nightlyRate(date: Date) {
 
   const month = date.getMonth() + 1;
 
-  if (month === 8) return 500; // Août
-  if (month === 7) return 450; // Juillet
-  if (month === 6) return 400; // Juin
-  if (month === 5) return 300; // Mai
-  if (month === 4) return 250; // Avril
-  if (month === 9) return 250; // Septembre
+  if (month === 8) return 500;
+  if (month === 7) return 450;
+  if (month === 6) return 400;
+  if (month === 5) return 300;
+  if (month === 4) return 250;
+  if (month === 9) return 250;
 
-  // Octobre (10) -> Mars (3)
-  if (
-    month === 10 ||
-    month === 11 ||
-    month === 12 ||
-    month === 1 ||
-    month === 2 ||
-    month === 3
-  )
-    return 170;
+  if (month === 10 || month === 11 || month === 12 || month === 1 || month === 2 || month === 3) return 170;
 
-  // Par défaut (au cas où) : 250
   return 250;
 }
 
@@ -147,15 +114,7 @@ function calcBaseAccommodation(startISO: string, endISO: string) {
   return { base: total, nightly };
 }
 
-function ChipWhite({
-  icon,
-  label,
-  value,
-}: {
-  icon: string;
-  label: string;
-  value: string;
-}) {
+function ChipWhite({ icon, label, value }: { icon: string; label: string; value: string }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm shadow-sm">
       <span className="text-base">{icon}</span>
@@ -165,59 +124,86 @@ function ChipWhite({
   );
 }
 
+function Modal({
+  open,
+  title,
+  children,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-lg rounded-3xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
+          <div className="text-lg font-extrabold text-slate-900">{title}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
+            aria-label="Fermer"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="px-6 py-5">{children}</div>
+        <div className="border-t border-slate-200 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-[#0b2a3a] px-6 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ContactSection({
   hostEmail,
   airbnbCalendarUrl = "https://www.airbnb.fr/rooms/867121310852790122?guests=1&adults=1&s=67&unique_share_id=a77ffe87-87a5-4730-8e31-cebf52ed6508",
 }: Props) {
-  // ✅ IMPORTANT : composant client -> on ne peut lire que des env "NEXT_PUBLIC_*"
   const resolvedHostEmail =
-    hostEmail ||
-    process.env.NEXT_PUBLIC_HOST_EMAIL ||
-    "contact@superbe-bergerie-foret-piscine-lac.com";
+    hostEmail || process.env.NEXT_PUBLIC_HOST_EMAIL || "contact@superbe-bergerie-foret-piscine-lac.com";
 
   const [draft, setDraft] = useState<Draft>({
     name: "",
     email: "",
     phone: "",
-
     startDate: "",
     endDate: "",
     adults: 2,
     children: 0,
-
     animalType: "chien",
     otherAnimalLabel: "",
     animalsCount: 0,
-
     woodQuarterSteres: 0,
     visitorsCount: 0,
-
     extraSleepersCount: 0,
     extraSleepersNights: 0,
-
     earlyArrival: false,
     lateDeparture: false,
-
     message: "",
   });
 
-  const nights = useMemo(
-    () => diffNights(draft.startDate, draft.endDate),
-    [draft.startDate, draft.endDate]
-  );
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [successOpen, setSuccessOpen] = useState(false);
 
-  const accommodation = useMemo(
-    () => calcBaseAccommodation(draft.startDate, draft.endDate),
-    [draft.startDate, draft.endDate]
-  );
+  const nights = useMemo(() => diffNights(draft.startDate, draft.endDate), [draft.startDate, draft.endDate]);
+  const accommodation = useMemo(() => calcBaseAccommodation(draft.startDate, draft.endDate), [draft.startDate, draft.endDate]);
 
   const animalLabel = useMemo(() => {
     if (draft.animalsCount <= 0) return "—";
     if (draft.animalType === "chien") return `${draft.animalsCount} chien(s)`;
     if (draft.animalType === "chat") return `${draft.animalsCount} chat(s)`;
-    const other = draft.otherAnimalLabel.trim().length
-      ? ` (${draft.otherAnimalLabel.trim()})`
-      : "";
+    const other = draft.otherAnimalLabel.trim().length ? ` (${draft.otherAnimalLabel.trim()})` : "";
     return `${draft.animalsCount} autre(s)${other}`;
   }, [draft.animalsCount, draft.animalType, draft.otherAnimalLabel]);
 
@@ -236,27 +222,20 @@ export default function ContactSection({
     const e = parseISODateLocal(draft.endDate);
     if (!s || !e) return "—";
     const fmt = (d: Date) =>
-      d
-        .toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })
-        .replace(".", "");
+      d.toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }).replace(".", "");
     return `${fmt(s)} → ${fmt(e)} (${nights} nuit${nights > 1 ? "s" : ""})`;
   }, [draft.startDate, draft.endDate, nights]);
 
   const pricing = useMemo(() => {
     const cleaningFee = 100;
-
     const animalsCost = Math.max(0, draft.animalsCount) * 10 * Math.max(0, nights);
     const woodCost = Math.max(0, draft.woodQuarterSteres) * 40;
     const visitorsCost = Math.max(0, draft.visitorsCount) * 50;
-
     const extraNights = Math.min(Math.max(0, draft.extraSleepersNights), Math.max(0, nights));
     const extraSleepersCost = Math.max(0, draft.extraSleepersCount) * 50 * extraNights;
-
     const earlyArrivalCost = draft.earlyArrival ? 70 : 0;
     const lateDepartureCost = draft.lateDeparture ? 70 : 0;
-
     const touristTax = Math.max(0, draft.adults) * Math.max(0, nights) * 3.93;
-
     const base = accommodation.base;
 
     const total =
@@ -296,41 +275,99 @@ export default function ContactSection({
     nights,
   ]);
 
+  async function submitBookingRequest() {
+    setIsSending(true);
+    setSendError(null);
+
+    try {
+      const res = await fetch("/api/booking-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: draft.name,
+          email: draft.email,
+          phone: draft.phone || null,
+          startDate: draft.startDate,
+          endDate: draft.endDate,
+          nights,
+          adults: draft.adults,
+          children: draft.children,
+          animalType: draft.animalType,
+          otherAnimalLabel: draft.otherAnimalLabel || null,
+          animalsCount: draft.animalsCount,
+          woodQuarterSteres: draft.woodQuarterSteres,
+          visitorsCount: draft.visitorsCount,
+          extraSleepersCount: draft.extraSleepersCount,
+          extraSleepersNights: draft.extraSleepersNights,
+          earlyArrival: draft.earlyArrival,
+          lateDeparture: draft.lateDeparture,
+          message: draft.message,
+          labels: { datesLabel, travelersLabel, animalLabel },
+          pricing: {
+            ...pricing,
+            touristTax: Number(pricing.touristTax.toFixed(2)),
+            total: Number(pricing.total.toFixed(2)),
+          },
+          accommodationNightly: accommodation.nightly.map((n) => ({
+            date: n.date.toISOString().slice(0, 10),
+            rate: n.rate,
+          })),
+          airbnbCalendarUrl,
+          resolvedHostEmail,
+        }),
+      });
+
+      const data = (await res.json().catch(() => null)) as any;
+      if (!res.ok || !data?.ok) throw new Error(data?.error || "Erreur lors de l’envoi.");
+
+      setSuccessOpen(true); // ✅ et on garde le formulaire rempli
+    } catch (e: any) {
+      setSendError(e?.message || "Erreur lors de l’envoi. Veuillez réessayer.");
+    } finally {
+      setIsSending(false);
+    }
+  }
+
   return (
-    <section
-      id="contact"
-      data-component="ContactSection-vB-pricing"
-      className="w-full bg-gradient-to-b from-[#0b2a3a] via-[#0a2a3c] to-[#051a2b]"
-    >
+    <section id="contact" data-component="ContactSection-vC-booking-api" className="w-full bg-gradient-to-b from-[#0b2a3a] via-[#0a2a3c] to-[#051a2b]">
+      <Modal open={successOpen} title="Demande envoyée ✅" onClose={() => setSuccessOpen(false)}>
+        <div className="grid gap-3 text-sm text-slate-700">
+          <p className="m-0">
+            Merci, votre demande a bien été envoyée.<br />
+            Vous recevrez une réponse par e-mail dans les plus brefs délais.
+          </p>
+          <p className="m-0">
+            <span className="font-extrabold text-red-600">
+              Important : si vous ne voyez pas notre message, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).
+            </span>
+          </p>
+          <p className="m-0">
+            En cas de doute, vous pouvez répondre directement à l’e-mail que vous allez recevoir, en indiquant votre nom et vos dates de séjour.
+          </p>
+        </div>
+      </Modal>
+
       <div className="mx-auto max-w-6xl px-6 py-14">
-        {/* Frame / glow */}
         <div className="relative rounded-[32px] border border-white/12 bg-white/10 p-1 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-xl">
           <div className="pointer-events-none absolute -inset-6 rounded-[40px] bg-[radial-gradient(closest-side,rgba(31,111,163,0.30),transparent)]" />
 
           <div className="relative overflow-hidden rounded-[28px] bg-white">
-            {/* Header (✅ couleur différente du fond : plus claire/teal) */}
             <div className="bg-gradient-to-r from-[#0f3b50] via-[#0b3347] to-[#082a3c] px-6 py-8 sm:px-10 sm:py-10">
               <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
                 <div className="max-w-2xl">
                   <div className="flex items-center gap-3">
-                    {/* ✅ bulle fond blanc */}
                     <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold tracking-widest text-slate-900">
                       CONTACT &amp; RÉSERVATION
                     </span>
-
                     <span className="inline-flex items-center rounded-full bg-emerald-400/15 px-3 py-1 text-[11px] font-bold text-emerald-100 ring-1 ring-emerald-300/30">
-                      V2
+                      V3
                       <span className="ml-2 inline-block h-2 w-2 rounded-full bg-emerald-300 motion-safe:animate-pulse" />
                     </span>
                   </div>
 
-                  <h2 className="mt-3 text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-                    Contacter
-                  </h2>
-
+                  <h2 className="mt-3 text-3xl font-extrabold tracking-tight text-white sm:text-4xl">Contacter</h2>
                   <p className="mt-2 text-base leading-relaxed text-white/85">
-                    Sélectionnez vos dates, indiquez le nombre de voyageurs, les animaux et les options.
-                    Le prix estimé s’affiche à droite automatiquement.
+                    Sélectionnez vos dates, indiquez le nombre de voyageurs, les animaux et les options. Le prix estimé s’affiche à droite automatiquement.
                   </p>
                 </div>
 
@@ -353,7 +390,6 @@ export default function ContactSection({
                 </div>
               </div>
 
-              {/* ✅ bulles fond blanc */}
               <div className="mt-6 flex flex-wrap gap-2">
                 <ChipWhite icon="📅" label="Dates" value={datesLabel} />
                 <ChipWhite icon="👥" label="Voyageurs" value={travelersLabel} />
@@ -361,324 +397,131 @@ export default function ContactSection({
               </div>
             </div>
 
-            {/* Content */}
             <div className="grid gap-8 px-6 py-8 sm:px-10 sm:py-10 lg:grid-cols-[1.05fr_0.95fr]">
-              {/* Form */}
               <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-xs font-semibold tracking-widest text-slate-500">
-                      FORMULAIRE
-                    </div>
+                    <div className="text-xs font-semibold tracking-widest text-slate-500">FORMULAIRE</div>
                     <p className="mt-1 text-base text-slate-600">
                       Les champs ci-dessous mettent à jour le résumé et le prix en temps réel.
                     </p>
                   </div>
 
-                  {/* ✅ bulle enveloppe fond bleu */}
                   <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#0b2a3a] ring-1 ring-white/10 shadow-sm">
                     <span className="text-lg text-white">✉️</span>
                   </div>
                 </div>
 
-                <form
-                  className="mt-6 grid gap-4"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-
-                    const subject = encodeURIComponent("Demande de disponibilité — Bergerie");
-                    const body = encodeURIComponent(
-                      [
-                        `Nom: ${draft.name}`,
-                        `Email: ${draft.email}`,
-                        `Téléphone: ${draft.phone || "—"}`,
-                        ``,
-                        `Séjour: ${datesLabel}`,
-                        `Voyageurs: ${travelersLabel}`,
-                        `Animaux: ${animalLabel}`,
-                        ``,
-                        `Options:`,
-                        `- Arrivée début de journée: ${draft.earlyArrival ? "Oui (+70€)" : "Non"}`,
-                        `- Départ fin de journée: ${draft.lateDeparture ? "Oui (+70€)" : "Non"}`,
-                        `- Bois: ${draft.woodQuarterSteres} x 1/4 stère (40€ / 1/4) => ${formatEUR(pricing.woodCost)}`,
-                        `- Visiteurs (ne dorment pas): ${draft.visitorsCount} x 50€ => ${formatEUR(pricing.visitorsCost)}`,
-                        `- Personnes en plus qui dorment: ${draft.extraSleepersCount} pers. x ${pricing.extraNights} nuit(s) x 50€ => ${formatEUR(pricing.extraSleepersCost)}`,
-                        ``,
-                        `Détail prix:`,
-                        `- Base hébergement: ${formatEUR(pricing.base)}`,
-                        `- Ménage (fixe): ${formatEUR(pricing.cleaningFee)}`,
-                        `- Animaux: ${formatEUR(pricing.animalsCost)}`,
-                        `- Bois: ${formatEUR(pricing.woodCost)}`,
-                        `- Visiteurs: ${formatEUR(pricing.visitorsCost)}`,
-                        `- Personnes en plus (nuits): ${formatEUR(pricing.extraSleepersCost)}`,
-                        `- Arrivée tôt: ${formatEUR(pricing.earlyArrivalCost)}`,
-                        `- Départ tard: ${formatEUR(pricing.lateDepartureCost)}`,
-                        `- Taxe de séjour (3,93€/adulte/nuit): ${formatEUR(pricing.touristTax)}`,
-                        `= TOTAL estimé: ${formatEUR(pricing.total)}`,
-                        ``,
-                        `Message:`,
-                        draft.message || "—",
-                        ``,
-                        `Lien Airbnb (calendrier): ${airbnbCalendarUrl}`,
-                      ].join("\n")
-                    );
-
-                    window.location.href = `mailto:${resolvedHostEmail}?subject=${subject}&body=${body}`;
-                  }}
-                >
+                <form className="mt-6 grid gap-4" onSubmit={(e) => { e.preventDefault(); if (!isSending) submitBookingRequest(); }}>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Nom</span>
-                      <input
-                        required
-                        value={draft.name}
-                        onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-                        placeholder="Votre nom"
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input required value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="Votre nom" className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
-
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Email</span>
-                      <input
-                        type="email"
-                        required
-                        value={draft.email}
-                        onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
-                        placeholder="vous@email.com"
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input type="email" required value={draft.email} onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))} placeholder="vous@email.com" className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
                   </div>
 
                   <label className="grid gap-2">
                     <span className="text-sm font-semibold text-slate-900">Téléphone (optionnel)</span>
-                    <input
-                      value={draft.phone}
-                      onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))}
-                      placeholder="06..."
-                      className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                    />
+                    <input value={draft.phone} onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))} placeholder="06..." className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                   </label>
 
-                  {/* ✅ Calendrier (date inputs) */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Date d’arrivée</span>
-                      <input
-                        type="date"
-                        required
-                        value={draft.startDate}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setDraft((d) => {
-                            // si endDate existe et devient invalide, on la vide
-                            const nightsNow = diffNights(v, d.endDate);
-                            return {
-                              ...d,
-                              startDate: v,
-                              endDate: d.endDate && nightsNow <= 0 ? "" : d.endDate,
-                            };
-                          });
-                        }}
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input type="date" required value={draft.startDate} onChange={(e) => {
+                        const v = e.target.value;
+                        setDraft((d) => {
+                          const nightsNow = diffNights(v, d.endDate);
+                          return { ...d, startDate: v, endDate: d.endDate && nightsNow <= 0 ? "" : d.endDate };
+                        });
+                      }} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
-
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Date de départ</span>
-                      <input
-                        type="date"
-                        required
-                        value={draft.endDate}
-                        min={draft.startDate || undefined}
-                        onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))}
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input type="date" required value={draft.endDate} min={draft.startDate || undefined} onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
                   </div>
 
-                  {/* ✅ Taxe de séjour : adultes / enfants */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Adultes (taxe de séjour)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={draft.adults}
-                        onChange={(e) => setDraft((d) => ({ ...d, adults: Number(e.target.value || 0) }))}
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input type="number" min={0} value={draft.adults} onChange={(e) => setDraft((d) => ({ ...d, adults: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
-
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Enfants (-18 ans)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={draft.children}
-                        onChange={(e) => setDraft((d) => ({ ...d, children: Number(e.target.value || 0) }))}
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
-                      <span className="text-xs text-slate-500">
-                        Enfants &lt; 18 ans : exonérés (taxe de séjour).
-                      </span>
+                      <input type="number" min={0} value={draft.children} onChange={(e) => setDraft((d) => ({ ...d, children: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
+                      <span className="text-xs text-slate-500">Enfants &lt; 18 ans : exonérés (taxe de séjour).</span>
                     </label>
                   </div>
 
-                  {/* ✅ Animaux détaillés */}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Type d’animal</span>
-                      <select
-                        value={draft.animalType}
-                        onChange={(e) =>
-                          setDraft((d) => ({ ...d, animalType: e.target.value as AnimalType }))
-                        }
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      >
+                      <select value={draft.animalType} onChange={(e) => setDraft((d) => ({ ...d, animalType: e.target.value as AnimalType }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10">
                         <option value="chien">Chien</option>
                         <option value="chat">Chat</option>
                         <option value="autre">Autre</option>
                       </select>
                     </label>
-
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Nombre d’animaux</span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={draft.animalsCount}
-                        onChange={(e) =>
-                          setDraft((d) => ({ ...d, animalsCount: Number(e.target.value || 0) }))
-                        }
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input type="number" min={0} value={draft.animalsCount} onChange={(e) => setDraft((d) => ({ ...d, animalsCount: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
                   </div>
 
                   {draft.animalType === "autre" && draft.animalsCount > 0 ? (
                     <label className="grid gap-2">
                       <span className="text-sm font-semibold text-slate-900">Précisez “autre animal”</span>
-                      <input
-                        value={draft.otherAnimalLabel}
-                        onChange={(e) =>
-                          setDraft((d) => ({ ...d, otherAnimalLabel: e.target.value }))
-                        }
-                        placeholder="Ex : lapin, tortue..."
-                        className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                      />
+                      <input value={draft.otherAnimalLabel} onChange={(e) => setDraft((d) => ({ ...d, otherAnimalLabel: e.target.value }))} placeholder="Ex : lapin, tortue..." className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                     </label>
                   ) : null}
 
-                  {/* ✅ Options */}
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                     <div className="text-sm font-semibold text-slate-900">Options</div>
 
                     <div className="mt-4 grid gap-4">
                       <label className="flex items-center justify-between gap-4">
                         <div>
-                          <div className="text-sm font-semibold text-slate-900">
-                            Arrivée début de journée (au lieu de 16h)
-                          </div>
+                          <div className="text-sm font-semibold text-slate-900">Arrivée début de journée (au lieu de 16h)</div>
                           <div className="text-xs text-slate-600">+70€ (si possible)</div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={draft.earlyArrival}
-                          onChange={(e) => setDraft((d) => ({ ...d, earlyArrival: e.target.checked }))}
-                          className="h-5 w-5"
-                        />
+                        <input type="checkbox" checked={draft.earlyArrival} onChange={(e) => setDraft((d) => ({ ...d, earlyArrival: e.target.checked }))} className="h-5 w-5" />
                       </label>
 
                       <label className="flex items-center justify-between gap-4">
                         <div>
-                          <div className="text-sm font-semibold text-slate-900">
-                            Départ fin de journée (au lieu de 10h)
-                          </div>
+                          <div className="text-sm font-semibold text-slate-900">Départ fin de journée (au lieu de 10h)</div>
                           <div className="text-xs text-slate-600">+70€ (si possible)</div>
                         </div>
-                        <input
-                          type="checkbox"
-                          checked={draft.lateDeparture}
-                          onChange={(e) => setDraft((d) => ({ ...d, lateDeparture: e.target.checked }))}
-                          className="h-5 w-5"
-                        />
+                        <input type="checkbox" checked={draft.lateDeparture} onChange={(e) => setDraft((d) => ({ ...d, lateDeparture: e.target.checked }))} className="h-5 w-5" />
                       </label>
 
                       <div className="grid gap-4 sm:grid-cols-2">
                         <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            Bois (¼ stère) — 40€ / ¼
-                          </span>
-                          <select
-                            value={draft.woodQuarterSteres}
-                            onChange={(e) =>
-                              setDraft((d) => ({ ...d, woodQuarterSteres: Number(e.target.value || 0) }))
-                            }
-                            className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none"
-                          >
-                            <option value={0}>0</option>
-                            <option value={1}>1 (¼)</option>
-                            <option value={2}>2 (½)</option>
-                            <option value={3}>3 (¾)</option>
-                            <option value={4}>4 (1 stère)</option>
+                          <span className="text-sm font-semibold text-slate-900">Bois (¼ stère) — 40€ / ¼</span>
+                          <select value={draft.woodQuarterSteres} onChange={(e) => setDraft((d) => ({ ...d, woodQuarterSteres: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none">
+                            <option value={0}>0</option><option value={1}>1 (¼)</option><option value={2}>2 (½)</option><option value={3}>3 (¾)</option><option value={4}>4 (1 stère)</option>
                           </select>
                         </label>
-
                         <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            Visiteurs (ne dorment pas) — 50€ / visiteur
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={draft.visitorsCount}
-                            onChange={(e) => setDraft((d) => ({ ...d, visitorsCount: Number(e.target.value || 0) }))}
-                            className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none"
-                            placeholder="0"
-                          />
+                          <span className="text-sm font-semibold text-slate-900">Visiteurs (ne dorment pas) — 50€ / visiteur</span>
+                          <input type="number" min={0} value={draft.visitorsCount} onChange={(e) => setDraft((d) => ({ ...d, visitorsCount: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none" placeholder="0" />
                         </label>
                       </div>
 
                       <div className="grid gap-4 sm:grid-cols-2">
                         <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            Personnes en plus qui dorment — 50€ / personne / nuit
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={draft.extraSleepersCount}
-                            onChange={(e) =>
-                              setDraft((d) => ({ ...d, extraSleepersCount: Number(e.target.value || 0) }))
-                            }
-                            className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none"
-                            placeholder="0"
-                          />
+                          <span className="text-sm font-semibold text-slate-900">Personnes en plus qui dorment — 50€ / personne / nuit</span>
+                          <input type="number" min={0} value={draft.extraSleepersCount} onChange={(e) => setDraft((d) => ({ ...d, extraSleepersCount: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none" placeholder="0" />
                         </label>
-
                         <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            Nombre de nuits pour ces personnes
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={Math.max(0, nights)}
-                            value={draft.extraSleepersNights}
-                            onChange={(e) =>
-                              setDraft((d) => ({
-                                ...d,
-                                extraSleepersNights: Number(e.target.value || 0),
-                              }))
-                            }
-                            className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none"
-                            placeholder="0"
-                          />
-                          <span className="text-xs text-slate-500">
-                            Max : {Math.max(0, nights)} nuit(s) (selon vos dates).
-                          </span>
+                          <span className="text-sm font-semibold text-slate-900">Nombre de nuits pour ces personnes</span>
+                          <input type="number" min={0} max={Math.max(0, nights)} value={draft.extraSleepersNights} onChange={(e) => setDraft((d) => ({ ...d, extraSleepersNights: Number(e.target.value || 0) }))} className="h-12 rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-900 outline-none" placeholder="0" />
+                          <span className="text-xs text-slate-500">Max : {Math.max(0, nights)} nuit(s) (selon vos dates).</span>
                         </label>
                       </div>
                     </div>
@@ -686,148 +529,73 @@ export default function ContactSection({
 
                   <label className="grid gap-2">
                     <span className="text-sm font-semibold text-slate-900">Message</span>
-                    <textarea
-                      required
-                      value={draft.message}
-                      onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))}
-                      placeholder="Dites-nous ce que vous recherchez…"
-                      className="min-h-[140px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10"
-                    />
+                    <textarea required value={draft.message} onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} placeholder="Dites-nous ce que vous recherchez…" className="min-h-[140px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-[#1f6fa3]/60 focus:ring-4 focus:ring-[#1f6fa3]/10" />
                   </label>
 
+                  {sendError ? (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      {sendError}
+                      <div className="mt-2 text-xs text-red-700/80">
+                        Si le problème persiste : <a className="underline" href={`mailto:${resolvedHostEmail}`}>{resolvedHostEmail}</a>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <button
-                      type="submit"
-                      className="inline-flex h-12 items-center justify-center rounded-xl bg-[#0b2a3a] px-6 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
-                    >
-                      Envoyer ma demande
+                    <button type="submit" disabled={isSending} className="inline-flex h-12 items-center justify-center rounded-xl bg-[#0b2a3a] px-6 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:opacity-60">
+                      {isSending ? "Envoi en cours…" : "Envoyer ma demande"}
                     </button>
 
-                    <Link
-                      href={airbnbCalendarUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-white px-6 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 whitespace-nowrap"
-                    >
+                    <Link href={airbnbCalendarUrl} target="_blank" rel="noopener noreferrer" className="inline-flex h-12 items-center justify-center rounded-xl border border-slate-200 bg-white px-6 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 whitespace-nowrap">
                       Voir les disponibilités sur Airbnb
                     </Link>
                   </div>
 
                   <p className="text-sm font-semibold text-red-600">
-                    Le bouton Airbnb sert uniquement à consulter les disponibilités. Revenez ensuite ici
-                    pour envoyer votre demande si vous souhaitez passer entre particuliers et éviter les frais.
+                    Le bouton Airbnb sert uniquement à consulter les disponibilités. Revenez ensuite ici pour envoyer votre demande si vous souhaitez passer entre particuliers et éviter les frais.
                   </p>
                 </form>
               </div>
 
-              {/* Right panel */}
               <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-                <div className="text-xs font-semibold tracking-widest text-slate-500">
-                  RÉSUMÉ &amp; PRIX
-                </div>
-                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-                  Aperçu en temps réel
-                </div>
-                <p className="mt-2 text-base text-slate-600">
-                  Prix estimé (selon tarifs + options). Vérifiez avant l’envoi.
-                </p>
+                <div className="text-xs font-semibold tracking-widest text-slate-500">RÉSUMÉ &amp; PRIX</div>
+                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Aperçu en temps réel</div>
+                <p className="mt-2 text-base text-slate-600">Prix estimé (selon tarifs + options). Vérifiez avant l’envoi.</p>
 
                 <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5">
                   <div className="grid gap-2 text-base text-slate-700">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">📅 Dates</span>
-                      <span className="font-semibold text-slate-900">{datesLabel}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">👥 Voyageurs</span>
-                      <span className="font-semibold text-slate-900">{travelersLabel}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">🐾 Animaux</span>
-                      <span className="font-semibold text-slate-900">{animalLabel}</span>
-                    </div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">📅 Dates</span><span className="font-semibold text-slate-900">{datesLabel}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">👥 Voyageurs</span><span className="font-semibold text-slate-900">{travelersLabel}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">🐾 Animaux</span><span className="font-semibold text-slate-900">{animalLabel}</span></div>
                   </div>
                 </div>
 
-                {/* Détails prix */}
                 <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
                   <div className="text-sm font-semibold text-slate-900">Détail des prix</div>
 
                   <div className="mt-4 grid gap-3 text-base">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Base hébergement
-                        {nights > 0 ? ` (${nights} nuit${nights > 1 ? "s" : ""})` : ""}
-                      </span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.base)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Ménage (fixe)</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.cleaningFee)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Animaux (10€/animal/nuit)</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.animalsCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Bois ({draft.woodQuarterSteres} x 1/4 stère)
-                      </span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.woodCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Visiteurs ({draft.visitorsCount} x 50€)</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.visitorsCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">
-                        Personnes en plus ({draft.extraSleepersCount} pers. x {pricing.extraNights} nuit
-                        {pricing.extraNights > 1 ? "s" : ""})
-                      </span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.extraSleepersCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Arrivée début de journée</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.earlyArrivalCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Départ fin de journée</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.lateDepartureCost)}</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-slate-600">Taxe de séjour (3,93€/adulte/nuit)</span>
-                      <span className="font-semibold text-slate-900">{formatEUR(pricing.touristTax)}</span>
-                    </div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Base hébergement{nights > 0 ? ` (${nights} nuit${nights > 1 ? "s" : ""})` : ""}</span><span className="font-semibold text-slate-900">{formatEUR(pricing.base)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Ménage (fixe)</span><span className="font-semibold text-slate-900">{formatEUR(pricing.cleaningFee)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Animaux (10€/animal/nuit)</span><span className="font-semibold text-slate-900">{formatEUR(pricing.animalsCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Bois ({draft.woodQuarterSteres} x 1/4 stère)</span><span className="font-semibold text-slate-900">{formatEUR(pricing.woodCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Visiteurs ({draft.visitorsCount} x 50€)</span><span className="font-semibold text-slate-900">{formatEUR(pricing.visitorsCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Personnes en plus ({draft.extraSleepersCount} pers. x {pricing.extraNights} nuit{pricing.extraNights > 1 ? "s" : ""})</span><span className="font-semibold text-slate-900">{formatEUR(pricing.extraSleepersCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Arrivée début de journée</span><span className="font-semibold text-slate-900">{formatEUR(pricing.earlyArrivalCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Départ fin de journée</span><span className="font-semibold text-slate-900">{formatEUR(pricing.lateDepartureCost)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-slate-600">Taxe de séjour (3,93€/adulte/nuit)</span><span className="font-semibold text-slate-900">{formatEUR(pricing.touristTax)}</span></div>
 
                     <div className="my-2 h-px bg-slate-200" />
 
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-lg font-semibold text-slate-900">TOTAL estimé</span>
-                      <span className="text-lg font-extrabold text-slate-900">{formatEUR(pricing.total)}</span>
-                    </div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-lg font-semibold text-slate-900">TOTAL estimé</span><span className="text-lg font-extrabold text-slate-900">{formatEUR(pricing.total)}</span></div>
 
                     {accommodation.nightly.length > 0 ? (
                       <details className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                        <summary className="cursor-pointer text-sm font-semibold text-slate-900">
-                          Voir le détail par nuit
-                        </summary>
+                        <summary className="cursor-pointer text-sm font-semibold text-slate-900">Voir le détail par nuit</summary>
                         <div className="mt-3 grid gap-2 text-sm text-slate-700">
                           {accommodation.nightly.map((n, idx) => (
                             <div key={idx} className="flex items-center justify-between gap-3">
                               <span className="text-slate-600">
-                                {n.date.toLocaleDateString("fr-FR", {
-                                  weekday: "short",
-                                  day: "2-digit",
-                                  month: "2-digit",
-                                })}
+                                {n.date.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit" })}
                               </span>
                               <span className="font-semibold text-slate-900">{formatEUR(n.rate)}</span>
                             </div>
@@ -839,23 +607,15 @@ export default function ContactSection({
                 </div>
 
                 <p className="mt-6 text-sm text-slate-500">
-                  L’envoi se fait via votre application mail (mailto). Le prix affiché est une estimation basée
-                  sur vos tarifs et les options sélectionnées.
+                  L’envoi se fait via un e-mail automatique. Le prix affiché est une estimation basée sur vos tarifs et les options sélectionnées.
                 </p>
               </div>
             </div>
 
             <div className="border-t border-slate-200 bg-white px-6 py-6 sm:px-10">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-slate-600">
-                  Consultez les disponibilités sur Airbnb, puis revenez ici pour envoyer votre demande en direct.
-                </p>
-                <Link
-                  href={airbnbCalendarUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-50 whitespace-nowrap"
-                >
+                <p className="text-sm text-slate-600">Consultez les disponibilités sur Airbnb, puis revenez ici pour envoyer votre demande en direct.</p>
+                <Link href={airbnbCalendarUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-50 whitespace-nowrap">
                   Ouvrir Airbnb
                 </Link>
               </div>
