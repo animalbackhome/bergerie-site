@@ -2,7 +2,14 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { resend, RESEND_FROM, SITE_URL } from "@/lib/resendServer";
+import {
+  resend,
+  RESEND_FROM,
+  SITE_URL,
+  BOOKING_NOTIFY_EMAIL,
+  BOOKING_REPLY_TO,
+  BOOKING_MODERATION_SECRET,
+} from "@/lib/resendServer";
 
 type Payload = {
   name?: string;
@@ -61,18 +68,26 @@ function formatEUR(value: number) {
   return v.toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
 }
 
-function envOrNull(name: string) {
-  const v = process.env[name];
-  if (!v) return null;
-  const t = String(v).trim();
-  return t.length ? t : null;
+function validateEmailLike(v: string) {
+  return v.includes("@") && v.includes(".");
 }
 
-const BOOKING_NOTIFY_EMAIL = envOrNull("BOOKING_NOTIFY_EMAIL"); // ton email (admin)
-const BOOKING_REPLY_TO = envOrNull("BOOKING_REPLY_TO"); // optionnel: adresse qui reçoit les réponses clients (sinon = email client)
-const BOOKING_MODERATION_SECRET = envOrNull("BOOKING_MODERATION_SECRET"); // obligatoire pour liens signés
+function safeSiteUrl(req: Request) {
+  // Si SITE_URL est mal configuré (localhost en prod), on prend l’origin réel de la requête.
+  // Ça évite que les boutons renvoient vers localhost.
+  try {
+    const origin = new URL(req.url).origin;
+    const s = (SITE_URL || "").trim();
+    if (!s) return origin;
+    if (s.includes("localhost")) return origin;
+    return s;
+  } catch {
+    return (SITE_URL || "http://localhost:3000").trim();
+  }
+}
 
 function signModerationLink(params: {
+  baseUrl: string;
   id: string;
   action: "accept" | "reject" | "reply";
   exp: number;
@@ -80,7 +95,8 @@ function signModerationLink(params: {
   if (!BOOKING_MODERATION_SECRET) return null;
   const msg = `${params.id}.${params.action}.${params.exp}`;
   const sig = createHmac("sha256", BOOKING_MODERATION_SECRET).update(msg).digest("hex");
-  const url = new URL("/api/booking-request/moderate", SITE_URL);
+
+  const url = new URL("/api/booking-request/moderate", params.baseUrl);
   url.searchParams.set("id", params.id);
   url.searchParams.set("action", params.action);
   url.searchParams.set("exp", String(params.exp));
@@ -88,8 +104,46 @@ function signModerationLink(params: {
   return url.toString();
 }
 
-function validateEmailLike(v: string) {
-  return v.includes("@") && v.includes(".");
+function buildAnimalsSummary(params: {
+  animalsCount: number;
+  animalType: string;
+  otherAnimalLabel: string;
+}) {
+  const { animalsCount, animalType, otherAnimalLabel } = params;
+
+  if (!animalsCount) return "0";
+  if (animalType === "autre" && otherAnimalLabel) {
+    return `${animalsCount} (${animalType} - ${otherAnimalLabel})`;
+  }
+  return `${animalsCount} (${animalType || "—"})`;
+}
+
+function buildOptionsSummary(params: {
+  earlyArrival: boolean;
+  lateDeparture: boolean;
+  woodQuarterSteres: number;
+  visitorsCount: number;
+  extraSleepersCount: number;
+  extraSleepersNights: number;
+}) {
+  const {
+    earlyArrival,
+    lateDeparture,
+    woodQuarterSteres,
+    visitorsCount,
+    extraSleepersCount,
+    extraSleepersNights,
+  } = params;
+
+  const lines: string[] = [];
+
+  lines.push(`Arrivée début de journée: ${earlyArrival ? "Oui (+70€)" : "Non"}`);
+  lines.push(`Départ fin de journée: ${lateDeparture ? "Oui (+70€)" : "Non"}`);
+  lines.push(`Bois: ${woodQuarterSteres} x 1/4 stère`);
+  lines.push(`Visiteurs: ${visitorsCount}`);
+  lines.push(`Personnes en plus qui dorment: ${extraSleepersCount} (nuits: ${extraSleepersNights})`);
+
+  return lines.join("\n");
 }
 
 export async function POST(req: Request) {
@@ -115,11 +169,17 @@ export async function POST(req: Request) {
   const otherAnimalLabel = (body.otherAnimalLabel || "").trim();
   const animalsCount = Number.isFinite(body.animalsCount) ? Number(body.animalsCount) : 0;
 
-  const woodQuarterSteres = Number.isFinite(body.woodQuarterSteres) ? Number(body.woodQuarterSteres) : 0;
+  const woodQuarterSteres = Number.isFinite(body.woodQuarterSteres)
+    ? Number(body.woodQuarterSteres)
+    : 0;
   const visitorsCount = Number.isFinite(body.visitorsCount) ? Number(body.visitorsCount) : 0;
 
-  const extraSleepersCount = Number.isFinite(body.extraSleepersCount) ? Number(body.extraSleepersCount) : 0;
-  const extraSleepersNights = Number.isFinite(body.extraSleepersNights) ? Number(body.extraSleepersNights) : 0;
+  const extraSleepersCount = Number.isFinite(body.extraSleepersCount)
+    ? Number(body.extraSleepersCount)
+    : 0;
+  const extraSleepersNights = Number.isFinite(body.extraSleepersNights)
+    ? Number(body.extraSleepersNights)
+    : 0;
 
   const earlyArrival = !!body.earlyArrival;
   const lateDeparture = !!body.lateDeparture;
@@ -131,10 +191,7 @@ export async function POST(req: Request) {
   const total = Number.isFinite(pricing.total) ? Number(pricing.total) : 0;
 
   if (!name || !email || !message || !startDate || !endDate) {
-    return NextResponse.json(
-      { ok: false, error: "Missing required fields" },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "Missing required fields" }, { status: 400 });
   }
   if (!validateEmailLike(email)) {
     return NextResponse.json({ ok: false, error: "Invalid email" }, { status: 400 });
@@ -184,11 +241,13 @@ export async function POST(req: Request) {
 
   const id = data.id as string;
 
+  const baseUrl = safeSiteUrl(req);
+
   // Liens signés (expire 7 jours)
   const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
-  const acceptUrl = signModerationLink({ id, action: "accept", exp });
-  const rejectUrl = signModerationLink({ id, action: "reject", exp });
-  const replyUrl = signModerationLink({ id, action: "reply", exp });
+  const acceptUrl = signModerationLink({ baseUrl, id, action: "accept", exp });
+  const rejectUrl = signModerationLink({ baseUrl, id, action: "reject", exp });
+  const replyUrl = signModerationLink({ baseUrl, id, action: "reply", exp });
 
   const pricingLines = [
     `Base hébergement: ${formatEUR(Number(pricing.base || 0))}`,
@@ -203,7 +262,9 @@ export async function POST(req: Request) {
     `TOTAL estimé: ${formatEUR(total)}`,
   ].join("\n");
 
+  // =========================
   // Email admin (toi)
+  // =========================
   try {
     const plainText =
       `Nouvelle demande de réservation:\n\n` +
@@ -279,7 +340,7 @@ export async function POST(req: Request) {
     await resend.emails.send({
       from: RESEND_FROM,
       to: BOOKING_NOTIFY_EMAIL,
-      replyTo: BOOKING_REPLY_TO || email, // toi tu peux répondre facilement
+      replyTo: BOOKING_REPLY_TO || email,
       subject: "Nouvelle demande de réservation (bergerie-site)",
       text: plainText,
       html,
@@ -288,47 +349,61 @@ export async function POST(req: Request) {
     console.warn("Resend send failed:", e);
   }
 
-  // Email client (accusé de réception + “spam”)
+  // =========================
+  // Email client — TEXTE #2 EXACT (mot pour mot)
+  // =========================
   try {
+    const property_name = "Superbe bergerie en cœur de forêt – piscine & lac";
+    const guest_name = name;
+    const checkin_date = startDate;
+    const checkout_date = endDate;
+    const animals_summary = buildAnimalsSummary({ animalsCount, animalType, otherAnimalLabel });
+    const options_summary = buildOptionsSummary({
+      earlyArrival,
+      lateDeparture,
+      woodQuarterSteres,
+      visitorsCount,
+      extraSleepersCount,
+      extraSleepersNights,
+    });
+    const estimated_total = formatEUR(total);
+    const host_name = "Coralie";
+
+    const subject = `Nous avons bien reçu votre demande — ${property_name}`;
+
     const clientText =
-      `Bonjour ${name},\n\n` +
-      `Merci, votre demande a bien été envoyée.\n` +
-      `Vous recevrez une réponse par e-mail dans les plus brefs délais.\n\n` +
-      `IMPORTANT : si vous ne voyez pas notre message, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).\n\n` +
-      `En cas de doute, vous pouvez répondre directement à l’e-mail que vous allez recevoir, en indiquant votre nom et vos dates de séjour.\n\n` +
-      `Récapitulatif :\n` +
-      `Dates : ${startDate} → ${endDate} (${nights} nuit(s))\n` +
-      `Voyageurs : ${adults} adulte(s) + ${children} enfant(s)\n` +
-      `Total estimé : ${formatEUR(total)}\n\n` +
+      `Bonjour ${guest_name},\n` +
+      `Merci pour votre demande de disponibilité pour ${property_name}.\n` +
+      `Récapitulatif de votre demande :\n` +
+      `• Séjour : ${checkin_date} → ${checkout_date} (${nights} nuit(s))\n` +
+      `• Voyageurs : ${adults} adulte(s) / ${children} enfant(s)\n` +
+      `• Animaux : ${animals_summary}\n` +
+      `• Options : ${options_summary}\n` +
+      `• Estimation : ${estimated_total} (estimation, sous réserve de confirmation)\n` +
+      `Nous revenons vers vous dès que possible pour confirmer la disponibilité.\n` +
+      `Important : si vous ne recevez pas notre réponse, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).\n` +
+      `Vous pouvez répondre directement à cet e-mail si vous souhaitez compléter votre demande.\n` +
       `Cordialement,\n` +
-      `Superbe bergerie en cœur de forêt – piscine & lac`;
+      `${host_name} — ${property_name}`;
 
     const clientHtml = `
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.5">
-        <h2 style="margin:0 0 10px">Demande envoyée ✅</h2>
-        <p style="margin:0 0 10px">Bonjour ${escapeHtml(name)},</p>
-        <p style="margin:0 0 10px">
-          Merci, votre demande a bien été envoyée.<br/>
-          Vous recevrez une réponse par e-mail dans les plus brefs délais.
-        </p>
-        <p style="margin:0 0 10px">
-          <b style="color:#dc2626">
-            Important : si vous ne voyez pas notre message, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).
-          </b>
-        </p>
-        <p style="margin:0 0 12px">
-          En cas de doute, vous pouvez répondre directement à l’e-mail que vous allez recevoir, en indiquant votre nom et vos dates de séjour.
-        </p>
-
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px">
-          <div><b>Dates :</b> ${escapeHtml(startDate)} → ${escapeHtml(endDate)} (${nights} nuit(s))</div>
-          <div><b>Voyageurs :</b> ${adults} adulte(s) + ${children} enfant(s)</div>
-          <div><b>Total estimé :</b> ${escapeHtml(formatEUR(total))}</div>
-        </div>
-
-        <p style="margin:14px 0 0;color:#64748b;font-size:12px">
-          Ceci est un accusé de réception automatique.
-        </p>
+        <p>Bonjour ${escapeHtml(guest_name)},</p>
+        <p>Merci pour votre demande de disponibilité pour ${escapeHtml(property_name)}.</p>
+        <p>Récapitulatif de votre demande :</p>
+        <ul>
+          <li>• Séjour : ${escapeHtml(checkin_date)} → ${escapeHtml(checkout_date)} (${nights} nuit(s))</li>
+          <li>• Voyageurs : ${adults} adulte(s) / ${children} enfant(s)</li>
+          <li>• Animaux : ${escapeHtml(animals_summary)}</li>
+          <li>• Options : <pre style="margin:6px 0 0;white-space:pre-wrap;font-family:inherit">${escapeHtml(
+            options_summary
+          )}</pre></li>
+          <li>• Estimation : ${escapeHtml(estimated_total)} (estimation, sous réserve de confirmation)</li>
+        </ul>
+        <p>Nous revenons vers vous dès que possible pour confirmer la disponibilité.</p>
+        <p><b>Important : si vous ne recevez pas notre réponse, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).</b></p>
+        <p>Vous pouvez répondre directement à cet e-mail si vous souhaitez compléter votre demande.</p>
+        <p>Cordialement,<br/>${escapeHtml(host_name)} — ${escapeHtml(property_name)}</p>
       </div>
     `;
 
@@ -336,7 +411,7 @@ export async function POST(req: Request) {
       from: RESEND_FROM,
       to: email,
       replyTo: BOOKING_REPLY_TO || BOOKING_NOTIFY_EMAIL || undefined,
-      subject: "Votre demande a bien été envoyée — Superbe bergerie",
+      subject,
       text: clientText,
       html: clientHtml,
     });
