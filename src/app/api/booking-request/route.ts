@@ -152,11 +152,9 @@ function computePricing(args: {
     );
   }
 
-  const base =
-    Math.round(BOOKING_BASE_PRICE_PER_NIGHT * nights * 100) / 100;
+  const base = Math.round(BOOKING_BASE_PRICE_PER_NIGHT * nights * 100) / 100;
 
-  const cleaning =
-    Math.round((BOOKING_CLEANING_FEE_FIXED ?? 100) * 100) / 100;
+  const cleaning = Math.round((BOOKING_CLEANING_FEE_FIXED ?? 100) * 100) / 100;
 
   const animalsCount = Math.max(0, safeInt(args.animalsCount, 0));
   const animals =
@@ -195,15 +193,7 @@ function computePricing(args: {
 
   const total =
     Math.round(
-      (base +
-        cleaning +
-        animals +
-        wood +
-        visitors +
-        extra_people +
-        early_arrival +
-        late_departure +
-        tourist_tax) *
+      (base + cleaning + animals + wood + visitors + extra_people + early_arrival + late_departure + tourist_tax) *
         100
     ) / 100;
 
@@ -518,11 +508,21 @@ export async function POST(req: Request) {
       return u.toString();
     })();
 
-    const propertyName = (process.env.BOOKING_PROPERTY_NAME || "").trim() || "Superbe bergerie en cœur de forêt – piscine & lac";
+    const propertyName =
+      (process.env.BOOKING_PROPERTY_NAME || "").trim() ||
+      "Superbe bergerie en cœur de forêt – piscine & lac";
     const hostName = (process.env.BOOKING_HOST_NAME || "").trim() || "Coralie";
 
-    // Emails
-    await resend.emails.send({
+    // Emails (Resend peut être null si la clé n'est pas configurée)
+    const r = resend;
+    if (!r) {
+      return jsonError(
+        "Configuration manquante : RESEND_API_KEY (Resend). Ajoute-la dans Vercel > Environment Variables puis redeploy.",
+        500
+      );
+    }
+
+    await r.emails.send({
       from: RESEND_FROM,
       to: notifyEmail,
       subject: `Nouvelle demande — ${guestName} (${start_date} → ${end_date})`,
@@ -544,7 +544,7 @@ export async function POST(req: Request) {
       replyTo: (BOOKING_REPLY_TO || "").trim() || guestEmail,
     });
 
-    await resend.emails.send({
+    await r.emails.send({
       from: RESEND_FROM,
       to: guestEmail,
       subject: `Nous avons bien reçu votre demande — ${propertyName}`,
