@@ -122,6 +122,11 @@ export async function GET(req: Request) {
     };
   }
 
+  // ⚠️ Compat TS : selon ton resendServer.ts, `resend` peut être typé nullable.
+  // On garde le build safe : si `resend` est absent, on n'envoie pas l'email (mais on ne casse pas la prod).
+  const resendClient = resend;
+  const canSendEmail = !!resendClient && !!RESEND_FROM;
+
   if (action === "accepted") {
     // 1) Update statut
     const { error: upErr } = await supabase
@@ -180,13 +185,17 @@ export async function GET(req: Request) {
           `<p>Cordialement,<br/>${escapeHtml(host_name)} — ${escapeHtml(property_name)}</p>` +
           `</div>`;
 
-        await resend.emails.send({
-          from: RESEND_FROM,
-          to: r.email,
-          subject,
-          text,
-          html,
-        });
+        if (canSendEmail) {
+          await resendClient!.emails.send({
+            from: RESEND_FROM!,
+            to: r.email,
+            subject,
+            text,
+            html,
+          });
+        } else {
+          console.warn("Resend disabled (missing RESEND_API_KEY/RESEND_FROM). Email not sent.");
+        }
       } catch (e) {
         console.warn("Accept email send failed:", e);
       }
@@ -237,13 +246,17 @@ export async function GET(req: Request) {
           `<p>Cordialement,<br/>${escapeHtml(host_name)} — ${escapeHtml(property_name)}</p>` +
           `</div>`;
 
-        await resend.emails.send({
-          from: RESEND_FROM,
-          to: r.email,
-          subject,
-          text,
-          html,
-        });
+        if (canSendEmail) {
+          await resendClient!.emails.send({
+            from: RESEND_FROM!,
+            to: r.email,
+            subject,
+            text,
+            html,
+          });
+        } else {
+          console.warn("Resend disabled (missing RESEND_API_KEY/RESEND_FROM). Email not sent.");
+        }
       } catch (e) {
         console.warn("Reject email send failed:", e);
       }
