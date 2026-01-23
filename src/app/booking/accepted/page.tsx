@@ -1,11 +1,31 @@
 export default function BookingAcceptedPage() {
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 22, marginBottom: 12 }}>✅ Demande acceptée</h1>
-      <p>Merci. La demande a bien été marquée comme <b>acceptée</b>.</p>
-      <p style={{ marginTop: 12, color: "#555" }}>
-        Vous pouvez maintenant répondre au voyageur par e-mail pour finaliser.
-      </p>
+    <main className="min-h-screen bg-white">
+      {/* Bandeau haut (même style que le reste du site) */}
+      <section className="px-5 py-10 bg-gradient-to-b from-[#0b1b3a] to-[#0a1020] text-white">
+        <div className="max-w-3xl mx-auto">
+          <h1 className="text-2xl font-semibold">✅ Demande acceptée</h1>
+          <p className="opacity-80 mt-2">
+            Merci. La demande a bien été marquée comme <b>acceptée</b>.
+          </p>
+        </div>
+      </section>
+
+      {/* Contenu */}
+      <section className="px-5 py-10">
+        <div className="max-w-3xl mx-auto">
+          <div className="rounded-2xl border p-5">
+            <p className="text-slate-800">
+              Vous pouvez maintenant répondre au voyageur par e-mail pour finaliser.
+            </p>
+
+            <p className="text-sm text-slate-500 mt-3">
+              (Si vous êtes arrivée ici depuis un bouton dans l’e-mail, c’est normal : cette page confirme que
+              l’action a bien été prise en compte.)
+            </p>
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

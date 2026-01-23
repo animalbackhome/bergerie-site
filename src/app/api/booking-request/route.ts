@@ -1,216 +1,573 @@
-// src/app/api/contract/route.ts
+// src/app/api/booking-request/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createHmac } from "crypto";
+import { requireSupabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  resend,
+  RESEND_FROM,
+  SITE_URL,
+  BOOKING_NOTIFY_EMAIL,
+  BOOKING_REPLY_TO,
+  BOOKING_MODERATION_SECRET,
+  BOOKING_BASE_PRICE_PER_NIGHT,
+  BOOKING_TOURIST_TAX_PER_ADULT_NIGHT,
+  BOOKING_CLEANING_FEE_FIXED,
+  BOOKING_ANIMAL_FEE_PER_NIGHT,
+  BOOKING_WOOD_PRICE_PER_QUARTER_STERE,
+  BOOKING_VISITOR_FEE_PER_PERSON,
+  BOOKING_EXTRA_SLEEPER_FEE_PER_NIGHT,
+  BOOKING_EARLY_ARRIVAL_FEE,
+  BOOKING_LATE_DEPARTURE_FEE,
+} from "@/lib/resendServer";
+
+export const runtime = "nodejs";
 
 /**
- * Contract API
- * - Reads booking request by rid (booking_requests.id)
- * - Returns a FLAT payload expected by /contract page
+ * POST /api/booking-request
+ * - Reçoit une demande de réservation (depuis le formulaire Contact)
+ * - Recalcule le pricing côté serveur (verrouillage : ignore tout total envoyé par le client)
+ * - Insert dans Supabase (table booking_requests) avec status: "pending" + pricing (objet)
+ * - Envoie 2 emails via Resend :
+ *    1) Admin (toi) : récap + 3 boutons (Accepter / Refuser / Répondre) via liens signés
+ *    2) Client : accusé de réception
  *
- * IMPORTANT:
- * - Pricing / important fields must NOT be editable client-side.
- *   Pricing is returned as read-only fields (server-owned).
+ * IMPORTANT
+ * - Le pricing côté serveur est la source de vérité : on ne fait jamais confiance à un total client.
+ * - Les liens de modération DOIVENT matcher /api/booking-request/moderate/route.ts :
+ *    - action = "accept" | "reject" | "reply"
+ *    - signature HMAC = sha256(secret, `${id}.${action}.${exp}`)
  */
 
-function getSupabaseAdmin() {
-  const url =
-    process.env.SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    process.env.SUPABASE_PROJECT_URL;
+/* ------------------ Utils ------------------ */
 
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_SERVICE_KEY;
-
-  if (!url) {
-    throw new Error(
-      "Missing Supabase URL env. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)."
-    );
-  }
-  if (!serviceRoleKey) {
-    throw new Error(
-      "Missing Supabase service role env. Set SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY)."
-    );
-  }
-
-  return createClient(url, serviceRoleKey, {
-    auth: { persistSession: false },
-  });
+function jsonError(message: string, status = 400) {
+  return NextResponse.json(
+    { ok: false, error: message },
+    { status, headers: { "Cache-Control": "no-store, max-age=0" } }
+  );
 }
 
-function asNumber(v: unknown, fallback: number | null = null): number | null {
-  if (v === null || v === undefined) return fallback;
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function safeString(v: unknown): string {
+function safeStr(v: unknown) {
   return typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
 }
 
-export async function GET(req: Request) {
+function safeInt(v: unknown, fallback = 0) {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+function safeBool(v: unknown) {
+  return v === true || v === "true" || v === 1 || v === "1";
+}
+
+function isValidEmail(email: string) {
+  // validation simple (suffisante ici)
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function parseYmd(s: string) {
+  // attend "YYYY-MM-DD"
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+  // Date UTC (évite les surprises de timezone)
+  const dt = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0));
+  // Vérif cohérence
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+function diffNights(checkinYmd: string, checkoutYmd: string) {
+  const a = parseYmd(checkinYmd);
+  const b = parseYmd(checkoutYmd);
+  if (!a || !b) return null;
+  const ms = b.getTime() - a.getTime();
+  const nights = Math.round(ms / (24 * 60 * 60 * 1000));
+  return Number.isFinite(nights) ? nights : null;
+}
+
+/* ------------------ Types ------------------ */
+
+type BookingRequestBody = {
+  // Identité
+  name?: string;
+  email?: string;
+  phone?: string;
+  message?: string;
+
+  // Séjour
+  start_date?: string; // YYYY-MM-DD
+  end_date?: string; // YYYY-MM-DD
+
+  // Voyageurs
+  adults?: number;
+  children?: number;
+
+  // Animaux
+  animals_count?: number;
+  animal_type?: string; // "chien" | "chat" | "autre" | ""
+  other_animal_label?: string;
+
+  // Options
+  wood_quarters?: number; // nombre de 1/4 de stère
+  visitors_count?: number; // nb visiteurs (journée)
+  extra_people_count?: number; // nb personnes en + (qui dorment)
+  extra_people_nights?: number; // nb nuits facturées pour ces personnes
+  early_arrival?: boolean;
+  late_departure?: boolean;
+
+  // Calendrier Airbnb (optionnel)
+  airbnb_calendar_url?: string;
+
+  // ⚠️ IGNORÉ côté serveur (anti-triche) — on ne fait pas confiance au client :
+  // base_accommodation?: number;
+  // pricing?: any;
+  // total?: number;
+};
+
+/* ------------------ Pricing (verrouillé) ------------------ */
+
+function computePricing(args: {
+  nights: number;
+  adults: number;
+  animalsCount: number;
+  woodQuarters: number;
+  visitorsCount: number;
+  extraPeopleCount: number;
+  extraPeopleNights: number;
+  earlyArrival: boolean;
+  lateDeparture: boolean;
+}) {
+  const nights = Math.max(0, safeInt(args.nights, 0));
+  const adults = Math.max(0, safeInt(args.adults, 0));
+
+  // Anti-triche : base uniquement depuis env serveur.
+  if (BOOKING_BASE_PRICE_PER_NIGHT == null) {
+    // On préfère bloquer plutôt que de calculer un total faux / manipulable.
+    throw new Error(
+      "Configuration manquante : BOOKING_BASE_PRICE_PER_NIGHT. Ajoute-la dans Vercel > Environment Variables puis redeploy."
+    );
+  }
+
+  const base =
+    Math.round(BOOKING_BASE_PRICE_PER_NIGHT * nights * 100) / 100;
+
+  const cleaning =
+    Math.round((BOOKING_CLEANING_FEE_FIXED ?? 100) * 100) / 100;
+
+  const animalsCount = Math.max(0, safeInt(args.animalsCount, 0));
+  const animals =
+    animalsCount > 0
+      ? Math.round(animalsCount * (BOOKING_ANIMAL_FEE_PER_NIGHT ?? 10) * nights * 100) / 100
+      : 0;
+
+  const woodQuarters = Math.max(0, safeInt(args.woodQuarters, 0));
+  const wood =
+    woodQuarters > 0
+      ? Math.round(woodQuarters * (BOOKING_WOOD_PRICE_PER_QUARTER_STERE ?? 40) * 100) / 100
+      : 0;
+
+  const visitorsCount = Math.max(0, safeInt(args.visitorsCount, 0));
+  const visitors =
+    visitorsCount > 0
+      ? Math.round(visitorsCount * (BOOKING_VISITOR_FEE_PER_PERSON ?? 50) * 100) / 100
+      : 0;
+
+  const extraPeopleCount = Math.max(0, safeInt(args.extraPeopleCount, 0));
+  const extraPeopleNights = Math.max(0, safeInt(args.extraPeopleNights, 0));
+  const extra_people =
+    extraPeopleCount > 0 && extraPeopleNights > 0
+      ? Math.round(
+          extraPeopleCount * (BOOKING_EXTRA_SLEEPER_FEE_PER_NIGHT ?? 50) * extraPeopleNights * 100
+        ) / 100
+      : 0;
+
+  const early_arrival = args.earlyArrival ? (BOOKING_EARLY_ARRIVAL_FEE ?? 70) : 0;
+  const late_departure = args.lateDeparture ? (BOOKING_LATE_DEPARTURE_FEE ?? 70) : 0;
+
+  const tourist_tax =
+    adults > 0 && nights > 0
+      ? Math.round(adults * nights * (BOOKING_TOURIST_TAX_PER_ADULT_NIGHT ?? 3.93) * 100) / 100
+      : 0;
+
+  const total =
+    Math.round(
+      (base +
+        cleaning +
+        animals +
+        wood +
+        visitors +
+        extra_people +
+        early_arrival +
+        late_departure +
+        tourist_tax) *
+        100
+    ) / 100;
+
+  return {
+    currency: "EUR",
+    base_accommodation: base,
+    cleaning,
+    animals,
+    wood,
+    visitors,
+    extra_people,
+    early_arrival,
+    late_departure,
+    tourist_tax,
+    total,
+  };
+}
+
+/* ------------------ Moderation signed links ------------------ */
+
+function requireModerationSecret() {
+  const s = (BOOKING_MODERATION_SECRET || "").trim();
+  if (!s) {
+    throw new Error(
+      "Missing BOOKING_MODERATION_SECRET. Ajoute-la dans Vercel > Environment Variables puis redeploy."
+    );
+  }
+  return s;
+}
+
+function signModeration(params: { id: string; action: "accept" | "reject" | "reply"; exp: number }, secret: string) {
+  const msg = `${params.id}.${params.action}.${params.exp}`;
+  const sig = createHmac("sha256", secret).update(msg).digest("hex");
+  return { ...params, sig };
+}
+
+function buildModerationUrl(siteUrl: string, signed: { id: string; action: string; exp: number; sig: string }) {
+  const u = new URL("/api/booking-request/moderate", siteUrl);
+  u.searchParams.set("id", signed.id);
+  u.searchParams.set("action", signed.action);
+  u.searchParams.set("exp", String(signed.exp));
+  u.searchParams.set("sig", signed.sig);
+  return u.toString();
+}
+
+/* ------------------ Email templates ------------------ */
+
+function escapeHtml(s: string) {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatEUR(v: number) {
+  const n = Number.isFinite(v) ? v : 0;
+  return n.toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
+}
+
+function pricingLinesHtml(pricing: any) {
+  const lines: { label: string; key: string }[] = [
+    { label: "Base hébergement", key: "base_accommodation" },
+    { label: "Ménage (fixe)", key: "cleaning" },
+    { label: "Animaux", key: "animals" },
+    { label: "Bois (poêle)", key: "wood" },
+    { label: "Visiteurs (journée)", key: "visitors" },
+    { label: "Personnes supplémentaires (nuits)", key: "extra_people" },
+    { label: "Arrivée début de journée", key: "early_arrival" },
+    { label: "Départ fin de journée", key: "late_departure" },
+    { label: "Taxe de séjour", key: "tourist_tax" },
+  ];
+
+  const rows = lines
+    .map((l) => {
+      const v = Number(pricing?.[l.key] || 0);
+      if (!Number.isFinite(v) || v <= 0) return "";
+      return `<li>${escapeHtml(l.label)} : <b>${escapeHtml(formatEUR(v))}</b></li>`;
+    })
+    .filter(Boolean)
+    .join("");
+
+  return rows ? `<ul style="margin:8px 0 0 18px;padding:0">${rows}</ul>` : "";
+}
+
+function emailAdminHtml(payload: any) {
+  const {
+    guestName,
+    guestEmail,
+    guestPhone,
+    start_date,
+    end_date,
+    nights,
+    adults,
+    children,
+    animalsSummary,
+    message,
+    pricing,
+    links,
+    contractLink,
+  } = payload;
+
+  return `
+  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.45">
+    <h2>Nouvelle demande de réservation</h2>
+    <p><b>${escapeHtml(guestName)}</b> — ${escapeHtml(guestEmail)} — ${escapeHtml(guestPhone)}</p>
+
+    <p><b>Séjour :</b> ${escapeHtml(start_date)} → ${escapeHtml(end_date)} (${escapeHtml(String(nights))} nuit(s))</p>
+    <p><b>Voyageurs :</b> ${escapeHtml(String(adults))} adulte(s) / ${escapeHtml(String(children))} enfant(s)</p>
+    <p><b>Animaux :</b> ${escapeHtml(animalsSummary)}</p>
+
+    <p><b>Total estimé :</b> ${escapeHtml(formatEUR(Number(pricing.total || 0)))}</p>
+    ${pricingLinesHtml(pricing)}
+
+    ${message ? `<p><b>Message :</b><br/>${escapeHtml(message).replaceAll("\n", "<br/>")}</p>` : ""}
+
+    <hr style="margin:16px 0"/>
+
+    <p style="margin:0 0 10px 0"><b>Actions :</b></p>
+    <p style="display:flex;gap:10px;flex-wrap:wrap">
+      <a href="${links.accept}" style="background:#16a34a;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none">✅ Accepter</a>
+      <a href="${links.reject}" style="background:#dc2626;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none">❌ Refuser</a>
+      <a href="${links.reply}" style="background:#0f172a;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none">💬 Répondre</a>
+    </p>
+
+    <p style="margin-top:14px">
+      Lien contrat (après acceptation) :<br/>
+      <a href="${contractLink}">${contractLink}</a>
+    </p>
+
+    <p style="color:#64748b;font-size:12px;margin-top:16px">
+      Les liens expirent automatiquement. Ne transférez pas cet email.
+    </p>
+  </div>
+  `;
+}
+
+function emailClientHtml(payload: any) {
+  const {
+    guestName,
+    propertyName,
+    start_date,
+    end_date,
+    nights,
+    adults,
+    children,
+    animalsSummary,
+    pricing,
+    hostName,
+  } = payload;
+
+  return `
+  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.45">
+    <h2>Nous avons bien reçu votre demande — ${escapeHtml(propertyName)}</h2>
+    <p>Bonjour ${escapeHtml(guestName)},</p>
+    <p>Merci pour votre demande de disponibilité pour <b>${escapeHtml(propertyName)}</b>.</p>
+
+    <p><b>Récapitulatif de votre demande :</b></p>
+    <ul style="margin:8px 0 0 18px;padding:0">
+      <li>Séjour : <b>${escapeHtml(start_date)} → ${escapeHtml(end_date)}</b> (${escapeHtml(String(nights))} nuit(s))</li>
+      <li>Voyageurs : <b>${escapeHtml(String(adults))}</b> adulte(s) / <b>${escapeHtml(String(children))}</b> enfant(s)</li>
+      <li>Animaux : <b>${escapeHtml(animalsSummary)}</b></li>
+      <li>Estimation : <b>${escapeHtml(formatEUR(Number(pricing.total || 0)))}</b> (estimation, sous réserve de confirmation)</li>
+    </ul>
+
+    <p style="margin-top:14px">
+      Nous revenons vers vous dès que possible pour confirmer la disponibilité.
+    </p>
+
+    <p style="margin-top:14px;color:#0f172a">
+      <b>Important :</b> si vous ne recevez pas notre réponse, merci de vérifier votre dossier <b>Courrier indésirable / Spam</b> ainsi que l’onglet <b>Promotions</b> (Gmail).
+      Vous pouvez répondre directement à cet e-mail si vous souhaitez compléter votre demande.
+    </p>
+
+    <p>Cordialement,<br/>${escapeHtml(hostName)} — ${escapeHtml(propertyName)}</p>
+  </div>
+  `;
+}
+
+/* ------------------ Handler ------------------ */
+
+export async function POST(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const rid = searchParams.get("rid")?.trim();
+    const body = (await req.json()) as BookingRequestBody;
 
-    if (!rid) {
-      return NextResponse.json(
-        { ok: false, error: "Missing rid" },
-        { status: 400, headers: { "Cache-Control": "no-store" } }
+    const guestName = safeStr(body.name);
+    const guestEmail = safeStr(body.email);
+    const guestPhone = safeStr(body.phone);
+    const message = safeStr(body.message);
+
+    const start_date = safeStr(body.start_date);
+    const end_date = safeStr(body.end_date);
+
+    const adults = Math.max(0, safeInt(body.adults, 0));
+    const children = Math.max(0, safeInt(body.children, 0));
+
+    // Validations minimales
+    if (!guestName) return jsonError("Nom obligatoire.", 400);
+    if (!guestEmail || !isValidEmail(guestEmail)) return jsonError("Email invalide.", 400);
+    if (!start_date || !end_date) return jsonError("Dates obligatoires.", 400);
+
+    const nightsComputed = diffNights(start_date, end_date);
+    if (nightsComputed === null) return jsonError("Dates invalides (format attendu : YYYY-MM-DD).", 400);
+    if (nightsComputed <= 0) return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
+
+    const animals_count = Math.max(0, safeInt(body.animals_count, 0));
+    const animal_type = safeStr(body.animal_type);
+    const other_animal_label = safeStr(body.other_animal_label);
+
+    const animalsSummary =
+      animals_count <= 0
+        ? "0"
+        : animal_type === "autre" && other_animal_label
+          ? `${animals_count} (autre - ${other_animal_label})`
+          : `${animals_count} (${animal_type || "—"})`;
+
+    const wood_quarters = Math.max(0, safeInt(body.wood_quarters, 0));
+    const visitors_count = Math.max(0, safeInt(body.visitors_count, 0));
+    const extra_people_count = Math.max(0, safeInt(body.extra_people_count, 0));
+    const extra_people_nights = Math.max(0, safeInt(body.extra_people_nights, 0));
+    const early_arrival = safeBool(body.early_arrival);
+    const late_departure = safeBool(body.late_departure);
+
+    const pricing = computePricing({
+      nights: nightsComputed,
+      adults,
+      animalsCount: animals_count,
+      woodQuarters: wood_quarters,
+      visitorsCount: visitors_count,
+      extraPeopleCount: extra_people_count,
+      extraPeopleNights: extra_people_nights,
+      earlyArrival: early_arrival,
+      lateDeparture: late_departure,
+    });
+
+    // Env indispensables
+    const notifyEmail = (BOOKING_NOTIFY_EMAIL || "").trim();
+    if (!notifyEmail) {
+      return jsonError(
+        "Configuration manquante : BOOKING_NOTIFY_EMAIL. Ajoute-la dans Vercel > Environment Variables puis redeploy.",
+        500
       );
     }
 
-    const supabase = getSupabaseAdmin();
+    const secret = requireModerationSecret();
 
-    const { data, error } = await supabase
-      .from("booking_requests")
-      .select("*")
-      .eq("id", rid)
-      .maybeSingle();
+    // DB insert
+    const supabase = requireSupabaseAdmin();
 
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    const insertRow: any = {
+      status: "pending",
 
-    if (!data) {
-      return NextResponse.json(
-        { ok: false, error: "Not found" },
-        { status: 404, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+      name: guestName,
+      email: guestEmail,
+      phone: guestPhone || null,
+      message: message || null,
 
-    // ---- Normalize fields from DB (support multiple column names) ----
-    const name =
-      safeString((data as any).guest_name) ||
-      safeString((data as any).name) ||
-      safeString((data as any).full_name) ||
-      "";
+      start_date,
+      end_date,
+      nights: nightsComputed,
 
-    const email =
-      safeString((data as any).guest_email) ||
-      safeString((data as any).email) ||
-      "";
+      adults,
+      children,
 
-    const phone =
-      safeString((data as any).guest_phone) ||
-      safeString((data as any).phone) ||
-      "";
-
-    const start_date =
-      safeString((data as any).start_date) ||
-      safeString((data as any).checkin_date) ||
-      safeString((data as any).checkinDate) ||
-      "";
-
-    const end_date =
-      safeString((data as any).end_date) ||
-      safeString((data as any).checkout_date) ||
-      safeString((data as any).checkoutDate) ||
-      "";
-
-    const nights = asNumber((data as any).nights, 0) ?? 0;
-
-    const adults = asNumber((data as any).adults, 0) ?? 0;
-    const children = asNumber((data as any).children, 0) ?? 0;
-
-    const animals_count =
-      asNumber((data as any).animals_count, null) ??
-      asNumber((data as any).animals, 0) ??
-      0;
-
-    const animal_type =
-      safeString((data as any).animal_type) ||
-      safeString((data as any).animalType) ||
-      "";
-
-    const other_animal_label =
-      safeString((data as any).other_animal_label) ||
-      safeString((data as any).animal_other) ||
-      safeString((data as any).animalOther) ||
-      "";
-
-    // ---- Pricing (STRICTLY read-only) ----
-    // IMPORTANT: pricing.total must exist for /contract page.
-    const pricing = {
-      // Keep any extra details if you want, but the page mainly uses pricing.total
-      base_accommodation:
-        asNumber((data as any).price_base_hosting, null) ??
-        asNumber((data as any).base_hosting, null),
-
-      cleaning: asNumber((data as any).price_cleaning, 100) ?? 100,
-
-      animals:
-        asNumber((data as any).price_animals, null) ??
-        asNumber((data as any).animals_fee, null),
-
-      wood:
-        asNumber((data as any).price_wood, null) ??
-        asNumber((data as any).wood_fee, null),
-
-      visitors:
-        asNumber((data as any).price_visitors, null) ??
-        asNumber((data as any).visitors_fee, null),
-
-      extra_people:
-        asNumber((data as any).price_extra_sleepers, null) ??
-        asNumber((data as any).extra_sleepers_fee, null),
-
-      early_arrival:
-        asNumber((data as any).price_early_arrival, null) ??
-        asNumber((data as any).early_arrival_fee, null),
-
-      late_departure:
-        asNumber((data as any).price_late_departure, null) ??
-        asNumber((data as any).late_departure_fee, null),
-
-      tourist_tax:
-        asNumber((data as any).price_tourist_tax, null) ??
-        asNumber((data as any).taxe, null),
-
-      // This is the key used by your page:
-      total:
-        asNumber((data as any).price_total, null) ??
-        asNumber((data as any).estimated_total, 0) ??
-        0,
-
-      currency: "EUR",
-    };
-
-    // ---- FLAT payload expected by /contract page ----
-    const contract = {
-      id: rid,
-
-      name: name || null,
-      email: email || null,
-      phone: phone || null,
-
-      start_date: start_date || null,
-      end_date: end_date || null,
-      nights: Number.isFinite(Number(nights)) ? Number(nights) : 0,
-
-      adults: Number.isFinite(Number(adults)) ? Number(adults) : 0,
-      children: Number.isFinite(Number(children)) ? Number(children) : 0,
-
-      animals_count: Number.isFinite(Number(animals_count)) ? Number(animals_count) : 0,
+      animals_count,
       animal_type: animal_type || null,
       other_animal_label: other_animal_label || null,
 
+      wood_quarters: wood_quarters || 0,
+      visitors_count: visitors_count || 0,
+      extra_people_count: extra_people_count || 0,
+      extra_people_nights: extra_people_nights || 0,
+      early_arrival: early_arrival || false,
+      late_departure: late_departure || false,
+
+      airbnb_calendar_url: safeStr(body.airbnb_calendar_url) || null,
+
+      // ✅ source of truth serveur
       pricing,
     };
 
+    const { data: inserted, error: insErr } = await supabase
+      .from("booking_requests")
+      .insert(insertRow)
+      .select("id")
+      .maybeSingle();
+
+    if (insErr) throw new Error(insErr.message || "Erreur insertion Supabase.");
+    if (!inserted?.id) throw new Error("Insertion Supabase incomplète (id manquant).");
+
+    const id = String(inserted.id);
+
+    // Liens signés (exp 7 jours)
+    const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+
+    const baseUrl = (SITE_URL || "").trim() || "http://localhost:3000";
+
+    const acceptSigned = signModeration({ id, action: "accept", exp }, secret);
+    const rejectSigned = signModeration({ id, action: "reject", exp }, secret);
+    const replySigned = signModeration({ id, action: "reply", exp }, secret);
+
+    const links = {
+      accept: buildModerationUrl(baseUrl, acceptSigned),
+      reject: buildModerationUrl(baseUrl, rejectSigned),
+      reply: buildModerationUrl(baseUrl, replySigned),
+    };
+
+    const contractLink = (() => {
+      const u = new URL("/contract", baseUrl);
+      u.searchParams.set("rid", id);
+      return u.toString();
+    })();
+
+    const propertyName = (process.env.BOOKING_PROPERTY_NAME || "").trim() || "Superbe bergerie en cœur de forêt – piscine & lac";
+    const hostName = (process.env.BOOKING_HOST_NAME || "").trim() || "Coralie";
+
+    // Emails
+    await resend.emails.send({
+      from: RESEND_FROM,
+      to: notifyEmail,
+      subject: `Nouvelle demande — ${guestName} (${start_date} → ${end_date})`,
+      html: emailAdminHtml({
+        guestName,
+        guestEmail,
+        guestPhone,
+        start_date,
+        end_date,
+        nights: nightsComputed,
+        adults,
+        children,
+        animalsSummary,
+        message,
+        pricing,
+        links,
+        contractLink,
+      }),
+      replyTo: (BOOKING_REPLY_TO || "").trim() || guestEmail,
+    });
+
+    await resend.emails.send({
+      from: RESEND_FROM,
+      to: guestEmail,
+      subject: `Nous avons bien reçu votre demande — ${propertyName}`,
+      html: emailClientHtml({
+        guestName,
+        propertyName,
+        start_date,
+        end_date,
+        nights: nightsComputed,
+        adults,
+        children,
+        animalsSummary,
+        pricing,
+        hostName,
+      }),
+      replyTo: (BOOKING_REPLY_TO || "").trim() || undefined,
+    });
+
     return NextResponse.json(
-      { ok: true, contract },
-      { status: 200, headers: { "Cache-Control": "no-store" } }
+      { ok: true, id },
+      { status: 200, headers: { "Cache-Control": "no-store, max-age=0" } }
     );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json(
-      { ok: false, error: msg },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+  } catch (e: any) {
+    return jsonError(e?.message || "Erreur inconnue.", 500);
   }
 }

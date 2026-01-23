@@ -2,14 +2,38 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import {
-  resend,
-  RESEND_FROM,
-  BOOKING_MODERATION_SECRET,
-} from "@/lib/resendServer";
+import { resend, RESEND_FROM, BOOKING_MODERATION_SECRET } from "@/lib/resendServer";
 
-function verifySig(params: { id: string; action: string; exp: string; sig: string }) {
-  if (!BOOKING_MODERATION_SECRET) return false;
+export const runtime = "nodejs";
+
+/**
+ * GET /api/booking-request/moderate?id=...&action=...&exp=...&sig=...
+ *
+ * ✅ Ce endpoint est appelé depuis les boutons de l'email admin.
+ * Il valide la signature HMAC + expiration puis :
+ * - action=accepted  -> update status=accepted + email client (Texte #3 exact) + redirect /booking/accepted
+ * - action=refused   -> update status=refused  + email client (Texte #4 exact) + redirect /booking/refused
+ * - action=reply     -> pas d'update, redirect /booking/reply
+ *
+ * ⚠️ Compatibilité :
+ * - Anciennes valeurs possibles : action=accept / action=reject
+ * - Ancien format de signature possible : msg = `${id}.${action}.${exp}`
+ * - Nouveau format : base = `id=${id}&action=${action}&exp=${exp}`
+ */
+
+type ActionNormalized = "accepted" | "refused" | "reply";
+
+function normalizeAction(actionRaw: string): ActionNormalized | null {
+  const a = (actionRaw || "").trim().toLowerCase();
+  if (a === "accepted" || a === "accept") return "accepted";
+  if (a === "refused" || a === "rejected" || a === "reject") return "refused";
+  if (a === "reply") return "reply";
+  return null;
+}
+
+function verifySig(params: { id: string; actionRaw: string; exp: string; sig: string }) {
+  const secret = BOOKING_MODERATION_SECRET;
+  if (!secret) return false;
 
   const expNum = Number(params.exp);
   if (!Number.isFinite(expNum)) return false;
@@ -17,9 +41,19 @@ function verifySig(params: { id: string; action: string; exp: string; sig: strin
   const now = Math.floor(Date.now() / 1000);
   if (expNum < now) return false;
 
-  const msg = `${params.id}.${params.action}.${params.exp}`;
-  const expected = createHmac("sha256", BOOKING_MODERATION_SECRET).update(msg).digest("hex");
-  return expected === params.sig;
+  const action = normalizeAction(params.actionRaw);
+  if (!action) return false;
+
+  // ✅ Nouveau format (recommandé)
+  const baseNew = `id=${params.id}&action=${action}&exp=${params.exp}`;
+  const expectedNew = createHmac("sha256", secret).update(baseNew).digest("hex");
+
+  // ✅ Ancien format (compat)
+  const baseOld = `${params.id}.${params.actionRaw}.${params.exp}`;
+  const expectedOld = createHmac("sha256", secret).update(baseOld).digest("hex");
+
+  // Compare strict (hex)
+  return expectedNew === params.sig || expectedOld === params.sig;
 }
 
 function redirectTo(origin: string, path: string) {
@@ -29,7 +63,7 @@ function redirectTo(origin: string, path: string) {
 }
 
 function escapeHtml(input: string) {
-  return input
+  return (input || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -41,26 +75,27 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const origin = url.origin;
 
-  const id = url.searchParams.get("id") || "";
-  const action = url.searchParams.get("action") || "";
-  const exp = url.searchParams.get("exp") || "";
-  const sig = url.searchParams.get("sig") || "";
+  const id = (url.searchParams.get("id") || "").trim();
+  const actionRaw = (url.searchParams.get("action") || "").trim();
+  const exp = (url.searchParams.get("exp") || "").trim();
+  const sig = (url.searchParams.get("sig") || "").trim();
 
   // Lien incomplet / invalide / expiré → page refused
-  if (!id || !action || !exp || !sig) {
+  if (!id || !actionRaw || !exp || !sig) {
     return redirectTo(origin, "/booking/refused");
   }
-  if (!verifySig({ id, action, exp, sig })) {
+  if (!verifySig({ id, actionRaw, exp, sig })) {
     return redirectTo(origin, "/booking/refused");
   }
 
-  // Petit helper : récupérer la demande (pour envoyer les emails)
+  const action = normalizeAction(actionRaw);
+  if (!action) return redirectTo(origin, "/booking/refused");
+
+  // Helper : récupérer la demande (pour envoyer les emails)
   async function getRequest() {
     const { data, error } = await supabaseAdmin
       .from("booking_requests")
-      .select(
-        "id, status, name, email, start_date, end_date, nights"
-      )
+      .select("id, status, name, email, start_date, end_date, nights")
       .eq("id", id)
       .single();
 
@@ -76,8 +111,8 @@ export async function GET(req: Request) {
     };
   }
 
-  if (action === "accept") {
-    // 1) Update statut
+  // --- ACCEPT ---
+  if (action === "accepted") {
     const { error: upErr } = await supabaseAdmin
       .from("booking_requests")
       .update({ status: "accepted", moderated_at: new Date().toISOString() })
@@ -85,7 +120,6 @@ export async function GET(req: Request) {
 
     if (upErr) return redirectTo(origin, "/booking/refused");
 
-    // 2) Récup demande + envoi mail TEXTE #3 EXACT
     const r = await getRequest();
     if (r?.email && r?.name && r?.start_date && r?.end_date && (r.nights ?? 0) > 0) {
       try {
@@ -96,13 +130,11 @@ export async function GET(req: Request) {
         const nights = r.nights ?? 0;
         const host_name = "Coralie";
 
-        // ⚠️ Lien contrat : on le met déjà, la page contrat viendra ensuite
         const contract_link = new URL(`/contract?rid=${encodeURIComponent(id)}`, origin).toString();
 
-        // Objet TEXTE #3 EXACT
-        const subject = "Votre demande de réservation est acceptée — étape suivante : contrat & acompte";
+        const subject =
+          "Votre demande de réservation est acceptée — étape suivante : contrat & acompte";
 
-        // Contenu TEXTE #3 EXACT
         const text =
           `Bonjour ${guest_name},\n` +
           `Bonne nouvelle : votre demande de réservation est acceptée pour ${property_name} aux dates suivantes : ${checkin_date} → ${checkout_date} (${nights} nuit(s)).\n` +
@@ -149,8 +181,8 @@ export async function GET(req: Request) {
     return redirectTo(origin, "/booking/accepted");
   }
 
-  if (action === "reject") {
-    // 1) Update statut
+  // --- REFUSE ---
+  if (action === "refused") {
     const { error: upErr } = await supabaseAdmin
       .from("booking_requests")
       .update({ status: "refused", moderated_at: new Date().toISOString() })
@@ -158,7 +190,6 @@ export async function GET(req: Request) {
 
     if (upErr) return redirectTo(origin, "/booking/refused");
 
-    // 2) Récup demande + envoi mail TEXTE #4 EXACT
     const r = await getRequest();
     if (r?.email && r?.name && r?.start_date && r?.end_date) {
       try {
@@ -168,10 +199,8 @@ export async function GET(req: Request) {
         const checkout_date = r.end_date;
         const host_name = "Coralie";
 
-        // Objet TEXTE #4 EXACT
         const subject = `Indisponibilité — ${property_name}`;
 
-        // Contenu TEXTE #4 EXACT
         const text =
           `Bonjour ${guest_name},\n` +
           `Merci pour votre demande concernant ${property_name}.\n` +
@@ -208,8 +237,8 @@ export async function GET(req: Request) {
     return redirectTo(origin, "/booking/refused");
   }
 
+  // --- REPLY ---
   if (action === "reply") {
-    // “Répondre” = ne change pas le statut, juste une page d’info.
     return redirectTo(origin, "/booking/reply");
   }
 

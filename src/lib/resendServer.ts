@@ -1,6 +1,16 @@
 // src/lib/resendServer.ts
 import { Resend } from "resend";
 
+/**
+ * Centralise les variables d'env + initialisation Resend.
+ *
+ * ⚠️ Important (Next.js / Vercel)
+ * - Ne JAMAIS throw au chargement du module si une env manque,
+ *   sinon tu peux casser le build / preview.
+ * - On préfère : warnings + "resend" initialisé seulement si la clé existe.
+ *   Les routes API qui en ont besoin doivent avoir les envs en prod.
+ */
+
 function envOrNull(name: string) {
   const v = process.env[name];
   if (!v) return null;
@@ -15,10 +25,18 @@ function envNumberOrNull(name: string) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** -------------------------
+ * Resend client (lazy safe)
+ * ------------------------ */
 const apiKey = envOrNull("RESEND_API_KEY");
-if (!apiKey) throw new Error("Missing RESEND_API_KEY");
 
-export const resend = new Resend(apiKey);
+// Export conservé (pour compat) : si la clé n'est pas là, resend sera null.
+// Les routes qui appellent resend.emails.send doivent tourner avec RESEND_API_KEY présent.
+export const resend: Resend | null = apiKey ? new Resend(apiKey) : null;
+
+if (!apiKey) {
+  console.warn("Missing RESEND_API_KEY (emails disabled)");
+}
 
 // Expéditeur par défaut (doit être un sender valide côté Resend)
 export const RESEND_FROM = envOrNull("RESEND_FROM") || "onboarding@resend.dev";
@@ -49,10 +67,14 @@ if (!REVIEWS_MODERATION_SECRET) {
  * =====================================
  */
 
+// Nom "marketing" de la propriété (utilisé dans les emails)
+export const BOOKING_PROPERTY_NAME =
+  envOrNull("BOOKING_PROPERTY_NAME") || "Superbe bergerie en cœur de forêt – piscine & lac";
+
 // Email admin qui reçoit les demandes de réservation (toi)
 export const BOOKING_NOTIFY_EMAIL = envOrNull("BOOKING_NOTIFY_EMAIL");
 
-// Optionnel : adresse qui recevra les réponses (Reply-To) quand tu réponds au client
+// Optionnel : adresse qui recevra les réponses (Reply-To)
 export const BOOKING_REPLY_TO = envOrNull("BOOKING_REPLY_TO");
 
 // Secret HMAC pour signer les liens “Accepter / Refuser / Répondre”
@@ -60,7 +82,7 @@ export const BOOKING_MODERATION_SECRET = envOrNull("BOOKING_MODERATION_SECRET");
 
 /**
  * Tarification côté serveur (ANTI-TRICHE)
- * On utilisera ces valeurs dans /api/booking-request (et donc dans le contrat),
+ * Utilisable dans /api/booking-request (et donc dans le contrat),
  * au lieu de faire confiance aux montants envoyés par le navigateur.
  */
 export const BOOKING_BASE_PRICE_PER_NIGHT =
@@ -102,4 +124,15 @@ if (BOOKING_BASE_PRICE_PER_NIGHT == null) {
   console.warn(
     "Missing BOOKING_BASE_PRICE_PER_NIGHT (or BASE_PRICE_PER_NIGHT). Pricing anti-triche will not be fully server-driven."
   );
+}
+
+/**
+ * Petit helper optionnel (si tu veux sécuriser l'appel)
+ * Exemple usage :
+ *   const r = requireResend();
+ *   await r.emails.send(...)
+ */
+export function requireResend() {
+  if (!resend) throw new Error("Resend disabled (missing RESEND_API_KEY).");
+  return resend;
 }

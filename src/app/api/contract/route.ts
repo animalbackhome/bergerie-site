@@ -1,294 +1,179 @@
 // src/app/api/contract/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { requireSupabaseAdmin } from "@/lib/supabaseAdmin";
+
+export const runtime = "nodejs";
 
 /**
- * Contract API
- * - Reads booking request by rid (booking_requests.id)
- * - Returns a FLAT payload expected by /contract page
+ * GET /api/contract?rid=...
+ * - Lit la demande dans Supabase (table: booking_requests)
+ * - Renvoie un payload "verrouillé" (tarifs/pricing côté serveur uniquement)
  *
- * IMPORTANT:
- * - All pricing + important info are SERVER-OWNED and must not be editable.
- * - We return pricing breakdown from the stored JSON (booking_requests.pricing).
+ * ✅ Réponse attendue par /contract/page.tsx :
+ *   { ok: true, data: ContractData }
+ *
+ * ⚠️ IMPORTANT
+ * - Endpoint serveur uniquement (pas de "use client").
+ * - NE JAMAIS accepter/prendre le pricing depuis le navigateur : on renvoie seulement ce qui est en DB.
  */
 
-function getSupabaseAdmin() {
-  const url =
-    process.env.SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    process.env.SUPABASE_PROJECT_URL;
-
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SECRET_KEY ||
-    process.env.SUPABASE_SERVICE_KEY;
-
-  if (!url) {
-    throw new Error(
-      "Missing Supabase URL env. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)."
-    );
-  }
-  if (!serviceRoleKey) {
-    throw new Error(
-      "Missing Supabase service role env. Set SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY)."
-    );
-  }
-
-  return createClient(url, serviceRoleKey, { auth: { persistSession: false } });
+function jsonError(message: string, status = 400) {
+  return NextResponse.json(
+    { ok: false, error: message },
+    {
+      status,
+      headers: { "Cache-Control": "no-store, max-age=0" },
+    }
+  );
 }
 
-function asNumber(v: unknown, fallback: number | null = null): number | null {
-  if (v === null || v === undefined) return fallback;
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function safeString(v: unknown): string {
-  return typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
-}
-
-function safeBool(v: unknown): boolean {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
+function safeString(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
   if (typeof v === "string") {
-    const t = v.trim().toLowerCase();
-    return t === "1" || t === "true" || t === "yes" || t === "oui";
+    const t = v.trim();
+    return t.length ? t : null;
   }
-  return false;
+  const t = String(v).trim();
+  return t.length ? t : null;
 }
 
-function normalizePricing(p: any) {
-  const base = asNumber(p?.base, 0) ?? 0;
-  const cleaningFee = asNumber(p?.cleaningFee, 100) ?? 100;
-  const animalsCost = asNumber(p?.animalsCost, 0) ?? 0;
-  const woodCost = asNumber(p?.woodCost, 0) ?? 0;
-  const visitorsCost = asNumber(p?.visitorsCost, 0) ?? 0;
-  const extraSleepersCost = asNumber(p?.extraSleepersCost, 0) ?? 0;
-  const earlyArrivalCost = asNumber(p?.earlyArrivalCost, 0) ?? 0;
-  const lateDepartureCost = asNumber(p?.lateDepartureCost, 0) ?? 0;
-  const touristTax = asNumber(p?.touristTax, 0) ?? 0;
+function safeNumber(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
-  const totalFromPayload = asNumber(p?.total, null);
-  const computed =
-    base +
-    cleaningFee +
-    animalsCost +
-    woodCost +
-    visitorsCost +
-    extraSleepersCost +
-    earlyArrivalCost +
-    lateDepartureCost +
-    touristTax;
-
-  const total = Number.isFinite(Number(totalFromPayload))
-    ? Number(totalFromPayload)
-    : Math.round(computed * 100) / 100;
+function buildPricingFromLegacyRow(row: any) {
+  // Compat : si ton schéma n'avait pas encore une colonne "pricing" JSON,
+  // on reconstruit à partir de colonnes possibles.
+  const num = (x: any, fb: number | null = null) => {
+    const n = safeNumber(x);
+    return n === null ? fb : n;
+  };
 
   return {
-    base,
-    cleaningFee,
-    animalsCost,
-    woodCost,
-    visitorsCost,
-    extraSleepersCost,
-    earlyArrivalCost,
-    lateDepartureCost,
-    touristTax,
-    total,
+    base_accommodation:
+      num(row?.price_base_hosting) ?? num(row?.base_hosting),
+
+    cleaning: num(row?.price_cleaning, 100) ?? 100,
+
+    animals: num(row?.price_animals) ?? num(row?.animals_fee),
+
+    wood: num(row?.price_wood) ?? num(row?.wood_fee),
+
+    visitors: num(row?.price_visitors) ?? num(row?.visitors_fee),
+
+    extra_people:
+      num(row?.price_extra_sleepers) ?? num(row?.extra_sleepers_fee),
+
+    early_arrival:
+      num(row?.price_early_arrival) ?? num(row?.early_arrival_fee),
+
+    late_departure:
+      num(row?.price_late_departure) ?? num(row?.late_departure_fee),
+
+    tourist_tax: num(row?.price_tourist_tax) ?? num(row?.taxe),
+
+    total:
+      num(row?.price_total) ?? num(row?.estimated_total, 0) ?? 0,
+
     currency: "EUR",
   };
 }
 
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const rid = searchParams.get("rid")?.trim();
+    const url = new URL(req.url);
+    const rid = (url.searchParams.get("rid") || "").trim();
 
-    if (!rid) {
-      return NextResponse.json(
-        { ok: false, error: "Missing rid" },
-        { status: 400, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    if (!rid) return jsonError("Paramètre rid manquant.", 400);
 
-    const supabase = getSupabaseAdmin();
+    const supabase = requireSupabaseAdmin();
+
+    // ⚠️ Si tes colonnes portent d'autres noms, adapte ici.
+    // On tente de récupérer "pricing" + quelques colonnes legacy en fallback.
     const { data, error } = await supabase
       .from("booking_requests")
-      .select("*")
+      .select(
+        [
+          "id",
+          "name",
+          "email",
+          "phone",
+          "start_date",
+          "end_date",
+          "nights",
+          "adults",
+          "children",
+          "animals_count",
+          "animal_type",
+          "other_animal_label",
+          "pricing",
+          // legacy (optionnel)
+          "price_total",
+          "estimated_total",
+          "price_cleaning",
+          "price_base_hosting",
+          "base_hosting",
+          "price_animals",
+          "animals_fee",
+          "price_wood",
+          "wood_fee",
+          "price_visitors",
+          "visitors_fee",
+          "price_extra_sleepers",
+          "extra_sleepers_fee",
+          "price_early_arrival",
+          "early_arrival_fee",
+          "price_late_departure",
+          "late_departure_fee",
+          "price_tourist_tax",
+          "taxe",
+        ].join(",")
+      )
       .eq("id", rid)
       .maybeSingle();
 
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    if (error) return jsonError(error.message || "Erreur Supabase.", 500);
+    if (!data) return jsonError("Demande introuvable.", 404);
 
-    if (!data) {
-      return NextResponse.json(
-        { ok: false, error: "Not found" },
-        { status: 404, headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    const row: any = data;
 
-    // ---- Normalize fields from DB (support multiple column names) ----
-    const name =
-      safeString((data as any).guest_name) ||
-      safeString((data as any).name) ||
-      safeString((data as any).full_name) ||
-      "";
+    const pricing =
+      row?.pricing && typeof row.pricing === "object"
+        ? row.pricing
+        : buildPricingFromLegacyRow(row);
 
-    const email =
-      safeString((data as any).guest_email) ||
-      safeString((data as any).email) ||
-      "";
+    const payload = {
+      id: safeString(row.id) || rid,
 
-    const phone =
-      safeString((data as any).guest_phone) ||
-      safeString((data as any).phone) ||
-      "";
+      name: safeString(row.name),
+      email: safeString(row.email),
+      phone: safeString(row.phone),
 
-    const start_date =
-      safeString((data as any).start_date) ||
-      safeString((data as any).checkin_date) ||
-      safeString((data as any).checkinDate) ||
-      "";
+      start_date: safeString(row.start_date),
+      end_date: safeString(row.end_date),
+      nights: safeNumber(row.nights),
 
-    const end_date =
-      safeString((data as any).end_date) ||
-      safeString((data as any).checkout_date) ||
-      safeString((data as any).checkoutDate) ||
-      "";
+      adults: safeNumber(row.adults),
+      children: safeNumber(row.children),
 
-    const nights = asNumber((data as any).nights, 0) ?? 0;
-    const adults = asNumber((data as any).adults, 0) ?? 0;
-    const children = asNumber((data as any).children, 0) ?? 0;
+      animals_count: safeNumber(row.animals_count),
+      animal_type: safeString(row.animal_type),
+      other_animal_label: safeString(row.other_animal_label),
 
-    const animals_count =
-      asNumber((data as any).animals_count, null) ??
-      asNumber((data as any).animalsCount, null) ??
-      asNumber((data as any).animals, 0) ??
-      0;
-
-    const animal_type =
-      safeString((data as any).animal_type) ||
-      safeString((data as any).animalType) ||
-      "";
-
-    const other_animal_label =
-      safeString((data as any).other_animal_label) ||
-      safeString((data as any).otherAnimalLabel) ||
-      safeString((data as any).animal_other) ||
-      safeString((data as any).animalOther) ||
-      "";
-
-    const woodQuarterSteres =
-      asNumber((data as any).wood_quarter_steres, null) ??
-      asNumber((data as any).woodQuarterSteres, null) ??
-      0;
-
-    const visitorsCount =
-      asNumber((data as any).visitors_count, null) ??
-      asNumber((data as any).visitorsCount, null) ??
-      asNumber((data as any).visitors, null) ??
-      0;
-
-    const extraSleepersCount =
-      asNumber((data as any).extra_sleepers_count, null) ??
-      asNumber((data as any).extraSleepersCount, null) ??
-      0;
-
-    const extraSleepersNights =
-      asNumber((data as any).extra_sleepers_nights, null) ??
-      asNumber((data as any).extraSleepersNights, null) ??
-      0;
-
-    const earlyArrival =
-      safeBool((data as any).early_arrival) ||
-      safeBool((data as any).earlyArrival) ||
-      safeBool((data as any).arrival_early);
-
-    const lateDeparture =
-      safeBool((data as any).late_departure) ||
-      safeBool((data as any).lateDeparture) ||
-      safeBool((data as any).departure_late);
-
-    const message = safeString((data as any).message);
-
-    // ---- Pricing (STRICTLY read-only) ----
-    // Primary source: booking_requests.pricing JSON (written by /api/booking-request).
-    const pricingFromJson = (data as any).pricing;
-    const pricing = normalizePricing(pricingFromJson);
-
-    // Optional legacy fallback if you add separate columns later
-    const legacyTotal =
-      asNumber((data as any).price_total, null) ??
-      asNumber((data as any).estimated_total, null);
-
-    const finalPricing =
-      pricingFromJson && typeof pricingFromJson === "object"
-        ? pricing
-        : {
-            ...pricing,
-            total: Number.isFinite(Number(legacyTotal))
-              ? Number(legacyTotal)
-              : pricing.total,
-          };
-
-    // ---- FLAT payload expected by /contract page ----
-    // NOTE: The client must treat ALL fields below as READ-ONLY.
-    const flat = {
-      id: rid,
-
-      name: name || null,
-      email: email || null,
-      phone: phone || null,
-
-      start_date: start_date || null,
-      end_date: end_date || null,
-      nights: Number.isFinite(Number(nights)) ? Number(nights) : 0,
-
-      adults: Number.isFinite(Number(adults)) ? Number(adults) : 0,
-      children: Number.isFinite(Number(children)) ? Number(children) : 0,
-
-      animals_count: Number.isFinite(Number(animals_count))
-        ? Number(animals_count)
-        : 0,
-      animal_type: animal_type || null,
-      other_animal_label: other_animal_label || null,
-
-      wood_quarter_steres: Number.isFinite(Number(woodQuarterSteres))
-        ? Number(woodQuarterSteres)
-        : 0,
-      visitors_count: Number.isFinite(Number(visitorsCount))
-        ? Number(visitorsCount)
-        : 0,
-      extra_sleepers_count: Number.isFinite(Number(extraSleepersCount))
-        ? Number(extraSleepersCount)
-        : 0,
-      extra_sleepers_nights: Number.isFinite(Number(extraSleepersNights))
-        ? Number(extraSleepersNights)
-        : 0,
-      early_arrival: !!earlyArrival,
-      late_departure: !!lateDeparture,
-
-      message: message || null,
-
-      // Pricing used by /contract (read-only)
-      pricing: finalPricing,
+      // ✅ source of truth serveur
+      pricing,
     };
 
-    // /contract/page.tsx expects json.data
     return NextResponse.json(
-      { ok: true, data: flat },
-      { status: 200, headers: { "Cache-Control": "no-store" } }
+      { ok: true, data: payload },
+      {
+        status: 200,
+        headers: { "Cache-Control": "no-store, max-age=0" },
+      }
     );
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json(
-      { ok: false, error: msg },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+  } catch (e: any) {
+    return jsonError(e?.message || "Erreur inconnue.", 500);
   }
 }
