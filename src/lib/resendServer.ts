@@ -47,6 +47,13 @@ export const BOOKING_NOTIFY_EMAIL = envStr("BOOKING_NOTIFY_EMAIL");
 export const BOOKING_REPLY_TO = envStr("BOOKING_REPLY_TO");
 export const BOOKING_MODERATION_SECRET = envStr("BOOKING_MODERATION_SECRET");
 
+/** Emails Avis (Reviews)
+ * NOTE: les routes /api/reviews/* importent ces exports.
+ */
+export const REVIEWS_NOTIFY_EMAIL = envStr("REVIEWS_NOTIFY_EMAIL");
+export const REVIEWS_REPLY_TO = envStr("REVIEWS_REPLY_TO");
+export const REVIEWS_MODERATION_SECRET = envStr("REVIEWS_MODERATION_SECRET");
+
 /** Pricing (tous en EUR) */
 export const BOOKING_BASE_PRICE_PER_NIGHT = envNum("BOOKING_BASE_PRICE_PER_NIGHT");
 export const BOOKING_TOURIST_TAX_PER_ADULT_NIGHT = envNum("BOOKING_TOURIST_TAX_PER_ADULT_NIGHT");
