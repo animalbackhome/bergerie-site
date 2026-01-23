@@ -64,6 +64,73 @@ function isValidEmail(email: string) {
   // validation simple (suffisante ici)
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
+function normalizeYmd(input: unknown) {
+  if (input == null) return "";
+
+  // 1) "YYYY-MM-DD"
+  if (typeof input === "string") {
+    const s = input.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    // 2) ISO string "YYYY-MM-DDTHH:mm:ssZ" -> take date part
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0, 10);
+
+    return "";
+  }
+
+  // 3) timestamp number
+  if (typeof input === "number" && Number.isFinite(input)) {
+    const dt = new Date(input);
+    if (Number.isNaN(dt.getTime())) return "";
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(dt.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // 4) Date object
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) return "";
+    const y = input.getUTCFullYear();
+    const m = String(input.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(input.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  return "";
+}
+
+function pickDateField(body: any, kind: "start" | "end") {
+  // Supporte plusieurs conventions côté client pour éviter les régressions :
+  // - start_date / end_date (convention serveur)
+  // - startDate / endDate
+  // - checkin / checkout, checkIn / checkOut
+  // - dates: { from, to } (certains datepickers)
+  const candidates =
+    kind === "start"
+      ? [
+          body?.start_date,
+          body?.startDate,
+          body?.checkin,
+          body?.checkIn,
+          body?.dates?.from,
+          body?.dates?.start,
+        ]
+      : [
+          body?.end_date,
+          body?.endDate,
+          body?.checkout,
+          body?.checkOut,
+          body?.dates?.to,
+          body?.dates?.end,
+        ];
+
+  for (const c of candidates) {
+    const ymd = normalizeYmd(c);
+    if (ymd) return ymd;
+  }
+  return "";
+}
 
 function parseYmd(s: string) {
   // attend "YYYY-MM-DD"
@@ -385,8 +452,8 @@ export async function POST(req: Request) {
     const guestPhone = safeStr(body.phone);
     const message = safeStr(body.message);
 
-    const start_date = safeStr(body.start_date);
-    const end_date = safeStr(body.end_date);
+    const start_date = pickDateField(body as any, "start");
+    const end_date = pickDateField(body as any, "end");
 
     const adults = Math.max(0, safeInt(body.adults, 0));
     const children = Math.max(0, safeInt(body.children, 0));
