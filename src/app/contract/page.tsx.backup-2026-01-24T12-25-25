@@ -21,22 +21,10 @@ type PageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-function getParam(searchParams: any, key: string): string | undefined {
-  if (!searchParams) return undefined;
-
-  // If a Promise was passed (some Next.js typings), we can't synchronously read it.
-  if (typeof (searchParams as any)?.then === "function") return undefined;
-
-  // URLSearchParams-like
-  if (typeof (searchParams as any)?.get === "function") {
-    const v = (searchParams as any).get(key);
-    return typeof v === "string" ? v : undefined;
-  }
-
-  // Plain object (Next.js App Router): Record<string, string | string[]>
-  const raw = (searchParams as any)[key];
-  if (Array.isArray(raw)) return typeof raw[0] === "string" ? raw[0] : undefined;
-  return typeof raw === "string" ? raw : undefined;
+function getParam(sp: PageProps["searchParams"], key: string) {
+  const v = sp?.[key];
+  if (Array.isArray(v)) return v[0];
+  return v;
 }
 
 function normalizeRid(rid: string | undefined) {
