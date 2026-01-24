@@ -1,179 +1,252 @@
 // src/app/api/contract/route.ts
 import { NextResponse } from "next/server";
 import { requireSupabaseAdmin } from "@/lib/supabaseAdmin";
-
-export const runtime = "nodejs";
-
-/**
- * GET /api/contract?rid=...
- * - Lit la demande dans Supabase (table: booking_requests)
- * - Renvoie un payload "verrouillé" (tarifs/pricing côté serveur uniquement)
- *
- * ✅ Réponse attendue par /contract/page.tsx :
- *   { ok: true, data: ContractData }
- *
- * ⚠️ IMPORTANT
- * - Endpoint serveur uniquement (pas de "use client").
- * - NE JAMAIS accepter/prendre le pricing depuis le navigateur : on renvoie seulement ce qui est en DB.
- */
+import {
+  BOOKING_MODERATION_SECRET,
+  BOOKING_NOTIFY_EMAIL,
+  BOOKING_REPLY_TO,
+  RESEND_FROM,
+  SITE_URL,
+  requireResend,
+} from "@/lib/resendServer";
+import { verifyContractToken } from "@/lib/contractToken";
+import { renderContractText } from "@/lib/contractTemplate";
 
 function jsonError(message: string, status = 400) {
-  return NextResponse.json(
-    { ok: false, error: message },
-    {
-      status,
-      headers: { "Cache-Control": "no-store, max-age=0" },
-    }
-  );
+  return NextResponse.json({ ok: false, error: message }, { status });
 }
 
-function safeString(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "string") {
-    const t = v.trim();
-    return t.length ? t : null;
-  }
-  const t = String(v).trim();
-  return t.length ? t : null;
+function mustStr(v: unknown) {
+  const s = String(v ?? "").trim();
+  return s;
 }
 
-function safeNumber(v: unknown): number | null {
-  if (v === null || v === undefined) return null;
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
+function normalizeRid(rid: string | null) {
+  const s = mustStr(rid);
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return String(Math.trunc(n));
 }
 
-function buildPricingFromLegacyRow(row: any) {
-  // Compat : si ton schéma n'avait pas encore une colonne "pricing" JSON,
-  // on reconstruit à partir de colonnes possibles.
-  const num = (x: any, fb: number | null = null) => {
-    const n = safeNumber(x);
-    return n === null ? fb : n;
-  };
+function formatDateFR(d: string) {
+  // d attendu: YYYY-MM-DD
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(d);
+  if (!m) return d;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
 
-  return {
-    base_accommodation:
-      num(row?.price_base_hosting) ?? num(row?.base_hosting),
-
-    cleaning: num(row?.price_cleaning, 100) ?? 100,
-
-    animals: num(row?.price_animals) ?? num(row?.animals_fee),
-
-    wood: num(row?.price_wood) ?? num(row?.wood_fee),
-
-    visitors: num(row?.price_visitors) ?? num(row?.visitors_fee),
-
-    extra_people:
-      num(row?.price_extra_sleepers) ?? num(row?.extra_sleepers_fee),
-
-    early_arrival:
-      num(row?.price_early_arrival) ?? num(row?.early_arrival_fee),
-
-    late_departure:
-      num(row?.price_late_departure) ?? num(row?.late_departure_fee),
-
-    tourist_tax: num(row?.price_tourist_tax) ?? num(row?.taxe),
-
-    total:
-      num(row?.price_total) ?? num(row?.estimated_total, 0) ?? 0,
-
-    currency: "EUR",
-  };
+function nightsBetween(arrival: string, departure: string) {
+  const a = new Date(`${arrival}T00:00:00Z`).getTime();
+  const b = new Date(`${departure}T00:00:00Z`).getTime();
+  const diff = Math.round((b - a) / (1000 * 60 * 60 * 24));
+  return diff > 0 ? diff : 0;
 }
 
 export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const rid = normalizeRid(searchParams.get("rid"));
+  const t = searchParams.get("t");
+  if (!rid) return jsonError("Missing rid", 400);
+
+  const supabase = requireSupabaseAdmin();
+
+  const { data: booking, error } = await supabase
+    .from("booking_requests")
+    .select(
+      "id, created_at, full_name, email, phone, arrival_date, departure_date, adults_count, children_count, animals_count, message, pricing"
+    )
+    .eq("id", rid)
+    .maybeSingle();
+
+  if (error) return jsonError(error.message, 500);
+  if (!booking) return jsonError("Booking request not found", 404);
+
+  const okToken = verifyContractToken({
+    rid,
+    email: booking.email,
+    secret: BOOKING_MODERATION_SECRET,
+    token: t,
+  });
+  if (!okToken) return jsonError("Invalid token", 403);
+
+  const { data: contract } = await supabase
+    .from("booking_contracts")
+    .select(
+      "id, booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, accepted_terms, signed_at"
+    )
+    .eq("booking_request_id", rid)
+    .maybeSingle();
+
+  return NextResponse.json({ ok: true, booking, contract });
+}
+
+export async function POST(req: Request) {
+  let body: any = null;
   try {
-    const url = new URL(req.url);
-    const rid = (url.searchParams.get("rid") || "").trim();
-
-    if (!rid) return jsonError("Paramètre rid manquant.", 400);
-
-    const supabase = requireSupabaseAdmin();
-
-    // ⚠️ Si tes colonnes portent d'autres noms, adapte ici.
-    // On tente de récupérer "pricing" + quelques colonnes legacy en fallback.
-    const { data, error } = await supabase
-      .from("booking_requests")
-      .select(
-        [
-          "id",
-          "name",
-          "email",
-          "phone",
-          "start_date",
-          "end_date",
-          "nights",
-          "adults",
-          "children",
-          "animals_count",
-          "animal_type",
-          "other_animal_label",
-          "pricing",
-          // legacy (optionnel)
-          "price_total",
-          "estimated_total",
-          "price_cleaning",
-          "price_base_hosting",
-          "base_hosting",
-          "price_animals",
-          "animals_fee",
-          "price_wood",
-          "wood_fee",
-          "price_visitors",
-          "visitors_fee",
-          "price_extra_sleepers",
-          "extra_sleepers_fee",
-          "price_early_arrival",
-          "early_arrival_fee",
-          "price_late_departure",
-          "late_departure_fee",
-          "price_tourist_tax",
-          "taxe",
-        ].join(",")
-      )
-      .eq("id", rid)
-      .maybeSingle();
-
-    if (error) return jsonError(error.message || "Erreur Supabase.", 500);
-    if (!data) return jsonError("Demande introuvable.", 404);
-
-    const row: any = data;
-
-    const pricing =
-      row?.pricing && typeof row.pricing === "object"
-        ? row.pricing
-        : buildPricingFromLegacyRow(row);
-
-    const payload = {
-      id: safeString(row.id) || rid,
-
-      name: safeString(row.name),
-      email: safeString(row.email),
-      phone: safeString(row.phone),
-
-      start_date: safeString(row.start_date),
-      end_date: safeString(row.end_date),
-      nights: safeNumber(row.nights),
-
-      adults: safeNumber(row.adults),
-      children: safeNumber(row.children),
-
-      animals_count: safeNumber(row.animals_count),
-      animal_type: safeString(row.animal_type),
-      other_animal_label: safeString(row.other_animal_label),
-
-      // ✅ source of truth serveur
-      pricing,
-    };
-
-    return NextResponse.json(
-      { ok: true, data: payload },
-      {
-        status: 200,
-        headers: { "Cache-Control": "no-store, max-age=0" },
-      }
-    );
-  } catch (e: any) {
-    return jsonError(e?.message || "Erreur inconnue.", 500);
+    body = await req.json();
+  } catch {
+    return jsonError("Invalid JSON", 400);
   }
+
+  const rid = normalizeRid(mustStr(body?.rid));
+  const t = mustStr(body?.t);
+  if (!rid) return jsonError("Missing rid", 400);
+
+  const addressLine1 = mustStr(body?.signer_address_line1);
+  const addressLine2 = mustStr(body?.signer_address_line2);
+  const postalCode = mustStr(body?.signer_postal_code);
+  const city = mustStr(body?.signer_city);
+  const country = mustStr(body?.signer_country);
+  const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
+  const acceptedTerms = Boolean(body?.accepted_terms);
+
+  if (!addressLine1 || !postalCode || !city || !country) {
+    return jsonError("Adresse incomplète.", 400);
+  }
+  if (!acceptedTerms) {
+    return jsonError("Vous devez accepter le contrat.", 400);
+  }
+
+  // Validation occupants : {first_name,last_name,age}
+  const normOccupants = occupants
+    .map((o: any) => ({
+      first_name: mustStr(o?.first_name),
+      last_name: mustStr(o?.last_name),
+      age: mustStr(o?.age),
+    }))
+    .filter((o: any) => o.first_name && o.last_name && o.age);
+
+  if (normOccupants.length === 0) {
+    return jsonError("Ajoutez au moins une personne (nom, prénom, âge).", 400);
+  }
+
+  const supabase = requireSupabaseAdmin();
+
+  const { data: booking, error: bookingErr } = await supabase
+    .from("booking_requests")
+    .select(
+      "id, full_name, email, phone, arrival_date, departure_date, pricing, created_at"
+    )
+    .eq("id", rid)
+    .maybeSingle();
+
+  if (bookingErr) return jsonError(bookingErr.message, 500);
+  if (!booking) return jsonError("Booking request not found", 404);
+
+  const okToken = verifyContractToken({
+    rid,
+    email: booking.email,
+    secret: BOOKING_MODERATION_SECRET,
+    token: t,
+  });
+  if (!okToken) return jsonError("Invalid token", 403);
+
+  // Upsert
+  const { data: saved, error: upErr } = await supabase
+    .from("booking_contracts")
+    .upsert(
+      {
+        booking_request_id: rid,
+        signer_address_line1: addressLine1,
+        signer_address_line2: addressLine2 || null,
+        signer_postal_code: postalCode,
+        signer_city: city,
+        signer_country: country,
+        occupants: normOccupants,
+        accepted_terms: true,
+        ip: req.headers.get("x-forwarded-for") || null,
+        user_agent: req.headers.get("user-agent") || null,
+      },
+      { onConflict: "booking_request_id" }
+    )
+    .select(
+      "id, booking_request_id, signed_at, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants"
+    )
+    .single();
+
+  if (upErr) return jsonError(upErr.message, 500);
+
+  // Email
+  const resend = requireResend();
+  const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
+  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
+
+  const nights = nightsBetween(booking.arrival_date, booking.departure_date);
+  const totalPrice =
+    booking?.pricing?.total != null ? `${Number(booking.pricing.total).toFixed(2)} €` : "";
+
+  const addressText = `${addressLine1}${addressLine2 ? `, ${addressLine2}` : ""}, ${postalCode} ${city}, ${country}`;
+  const occupantsText = normOccupants
+    .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
+    .join("\n");
+
+  const contractText = renderContractText({
+    fullName: booking.full_name,
+    email: booking.email,
+    phone: booking.phone,
+    arrivalDate: formatDateFR(booking.arrival_date),
+    departureDate: formatDateFR(booking.departure_date),
+    nights,
+    totalPrice,
+    address: addressText,
+    occupantsText,
+  });
+
+  const subject = `Contrat signé — Demande #${rid}`;
+
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+      <h2>${subject}</h2>
+      <p><b>Réservant</b> : ${escapeHtml(booking.full_name)} — ${escapeHtml(booking.email)} — ${escapeHtml(booking.phone || "")}</p>
+      <p><b>Dates</b> : ${escapeHtml(formatDateFR(booking.arrival_date))} → ${escapeHtml(formatDateFR(booking.departure_date))} (${nights} nuit(s))</p>
+      ${totalPrice ? `<p><b>Total</b> : ${escapeHtml(totalPrice)}</p>` : ""}
+      <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
+      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(/\n/g, "<br/>")}</p>
+      ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
+      <hr/>
+      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+    </div>
+  `;
+
+  const recipientsOwner = BOOKING_NOTIFY_EMAIL ? [BOOKING_NOTIFY_EMAIL] : [];
+
+  // email au propriétaire (si configuré)
+  if (recipientsOwner.length) {
+    await resend.emails.send({
+      from: RESEND_FROM,
+      to: recipientsOwner,
+      replyTo: BOOKING_REPLY_TO || undefined,
+      subject,
+      html,
+    });
+  }
+
+  // email au client
+  await resend.emails.send({
+    from: RESEND_FROM,
+    to: [booking.email],
+    replyTo: BOOKING_REPLY_TO || undefined,
+    subject: "Votre contrat est signé ✅",
+    html: `
+      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+        <h2>Merci ! Votre contrat est signé ✅</h2>
+        <p>Vous pouvez conserver ce message comme preuve.</p>
+        ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
+        <hr/>
+        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+      </div>
+    `,
+  });
+
+  return NextResponse.json({ ok: true, contract: saved });
+}
+
+function escapeHtml(s: string) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
