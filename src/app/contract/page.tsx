@@ -4,6 +4,8 @@ import { requireSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { BOOKING_MODERATION_SECRET } from "@/lib/resendServer";
 import { verifyContractToken } from "@/lib/contractToken";
 
+export const dynamic = "force-dynamic";
+
 
 
 
