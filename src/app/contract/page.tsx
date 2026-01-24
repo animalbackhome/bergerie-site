@@ -6,26 +6,42 @@ import { verifyContractToken } from "@/lib/contractToken";
 
 export const dynamic = "force-dynamic";
 
-
-
-
 // --- UUID helper (added by patch) ---
 const __isUuid = (v: unknown) => {
   if (typeof v !== "string") return false;
   // Accept UUID v1-v5, case-insensitive
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim());
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v.trim()
+  );
 };
 // --- end UUID helper ---
 
+type SearchParamsShape = Record<string, string | string[] | undefined> | URLSearchParams;
+
 type PageProps = {
-  searchParams?: Record<string, string | string[] | undefined>;
+  // Next.js versions can type this as an object OR a Promise<object>.
+  searchParams?: SearchParamsShape | Promise<SearchParamsShape>;
 };
+
+async function resolveSearchParams(
+  searchParams: PageProps["searchParams"]
+): Promise<SearchParamsShape | undefined> {
+  if (!searchParams) return undefined;
+
+  // If a Promise was passed (some Next.js typings), await it.
+  if (typeof (searchParams as any)?.then === "function") {
+    try {
+      return (await (searchParams as any)) as SearchParamsShape;
+    } catch {
+      return undefined;
+    }
+  }
+
+  return searchParams as SearchParamsShape;
+}
 
 function getParam(searchParams: any, key: string): string | undefined {
   if (!searchParams) return undefined;
-
-  // If a Promise was passed (some Next.js typings), we can't synchronously read it.
-  if (typeof (searchParams as any)?.then === "function") return undefined;
 
   // URLSearchParams-like
   if (typeof (searchParams as any)?.get === "function") {
@@ -46,8 +62,10 @@ function normalizeRid(rid: string | undefined) {
 }
 
 export default async function ContractPage(props: PageProps) {
-  const rid = normalizeRid(getParam(props.searchParams, "rid"));
-  const t = String(getParam(props.searchParams, "t") || "");
+  const sp = await resolveSearchParams(props.searchParams);
+
+  const rid = normalizeRid(getParam(sp, "rid"));
+  const t = String(getParam(sp, "t") || "");
 
   if (!rid || !__isUuid(rid)) {
     return (
@@ -107,5 +125,11 @@ export default async function ContractPage(props: PageProps) {
     .eq("booking_request_id", rid)
     .maybeSingle();
 
-  return <ContractClient booking={booking as any} token={t} existing={(existing as any) || null} />;
+  return (
+    <ContractClient
+      booking={booking as any}
+      token={t}
+      existing={(existing as any) || null}
+    />
+  );
 }
