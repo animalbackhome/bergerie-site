@@ -21,7 +21,9 @@ const __isPositiveIntString = (v: unknown) => {
 };
 
 type PageProps = {
-  searchParams?: Record<string, string | string[] | undefined> | Promise<Record<string, any>>;
+  searchParams?:
+    | Record<string, string | string[] | undefined>
+    | Promise<Record<string, any>>;
 };
 
 async function resolveSearchParams(searchParams: any) {
@@ -76,15 +78,15 @@ export default async function ContractPage(props: PageProps) {
 
   const supabase = requireSupabaseAdmin();
 
-  const { data: booking } = await supabase
+  // NOTE: select("*") to avoid breaking when column names evolve.
+  const { data: bookingRaw, error: bookingError } = await supabase
     .from("booking_requests")
-    .select(
-      "id, full_name, email, phone, arrival_date, departure_date, pricing, created_at"
-    )
+    .select("*")
     .eq("id", rid)
     .maybeSingle();
 
-  if (!booking) {
+  if (bookingError) {
+    console.error("ContractPage: booking_requests select error", bookingError);
     return (
       <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="rounded-2xl bg-white/90 p-6 border">
@@ -95,9 +97,45 @@ export default async function ContractPage(props: PageProps) {
     );
   }
 
+  if (!bookingRaw) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-10">
+        <div className="rounded-2xl bg-white/90 p-6 border">
+          <h1 className="text-xl font-semibold">Contrat</h1>
+          <p className="mt-2 text-slate-700">Demande introuvable.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const bookingAny = bookingRaw as any;
+
+  // Provide backward-compatible field aliases (so ContractClient keeps working)
+  const bookingForClient = {
+    ...bookingAny,
+    full_name:
+      bookingAny.full_name ??
+      bookingAny.name ??
+      bookingAny.fullName ??
+      bookingAny.nom ??
+      "",
+    arrival_date:
+      bookingAny.arrival_date ??
+      bookingAny.start_date ??
+      bookingAny.arrivalDate ??
+      bookingAny.date_arrivee ??
+      null,
+    departure_date:
+      bookingAny.departure_date ??
+      bookingAny.end_date ??
+      bookingAny.departureDate ??
+      bookingAny.date_depart ??
+      null,
+  };
+
   const okToken = verifyContractToken({
     rid,
-    email: booking.email,
+    email: bookingAny.email,
     secret: BOOKING_MODERATION_SECRET,
     token: t,
   });
@@ -122,6 +160,10 @@ export default async function ContractPage(props: PageProps) {
     .maybeSingle();
 
   return (
-    <ContractClient booking={booking as any} token={t} existing={(existing as any) || null} />
+    <ContractClient
+      booking={bookingForClient as any}
+      token={t}
+      existing={(existing as any) || null}
+    />
   );
 }
