@@ -42,7 +42,9 @@ function getParam(searchParams: any, key: string): string | undefined {
 function normalizeRid(rid: string | undefined) {
   const s = String(rid || "").trim();
   if (!s) return null;
-  return s;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return String(Math.trunc(n));
 }
 
 export default async function ContractPage(props: PageProps) {
