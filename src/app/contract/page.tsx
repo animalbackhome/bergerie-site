@@ -63,11 +63,7 @@ function normalizeRid(rid: string | undefined) {
 export default async function ContractPage(props: PageProps) {
   const sp = await resolveSearchParams((props as any).searchParams);
   const rid = normalizeRid(getParam(sp, "rid"));
-
-  // Token can be passed as `t` (current) or `token` (fallback)
-  const tRaw = String(getParam(sp, "t") || getParam(sp, "token") || "");
-  // Some clients decode `+` as space in query params; normalize it back.
-  const t = tRaw.replace(/\s/g, "+");
+  const t = String(getParam(sp, "t") || "");
 
   if (!rid) {
     return (
@@ -82,15 +78,21 @@ export default async function ContractPage(props: PageProps) {
 
   const supabase = requireSupabaseAdmin();
 
-  const { data: booking } = await supabase
+  // IMPORTANT:
+  // - Ton schéma a déjà changé (ex: name/start_date/end_date) vs (full_name/arrival_date/departure_date)
+  // - Si on "select" une colonne qui n'existe pas, PostgREST/Supabase renvoie une erreur et data=null
+  // => donc on lit les colonnes actuelles (et on garde des fallbacks) pour éviter "Demande introuvable".
+  const { data: bookingRaw, error: bookingErr } = await supabase
     .from("booking_requests")
-    .select(
-      "id, full_name, email, phone, arrival_date, departure_date, pricing, created_at"
-    )
+    .select("*")
     .eq("id", rid)
     .maybeSingle();
 
-  if (!booking) {
+  if (bookingErr) {
+    console.error("[contract] booking_requests fetch error", bookingErr);
+  }
+
+  if (!bookingRaw) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="rounded-2xl bg-white/90 p-6 border">
@@ -101,18 +103,30 @@ export default async function ContractPage(props: PageProps) {
     );
   }
 
-  // IMPORTANT:
-  // - If a token is present, we verify it.
-  // - If no token is provided (legacy links), we allow access because `rid` is a UUID
-  //   and remains practically unguessable.
-  const okToken =
-    !t ||
-    verifyContractToken({
+  const booking = {
+    id: (bookingRaw as any).id,
+    full_name: (bookingRaw as any).full_name ?? (bookingRaw as any).name ?? "",
+    email: (bookingRaw as any).email ?? "",
+    phone: (bookingRaw as any).phone ?? "",
+    arrival_date: (bookingRaw as any).arrival_date ?? (bookingRaw as any).start_date ?? null,
+    departure_date: (bookingRaw as any).departure_date ?? (bookingRaw as any).end_date ?? null,
+    nights: (bookingRaw as any).nights ?? null,
+    pricing: (bookingRaw as any).pricing ?? null,
+    created_at: (bookingRaw as any).created_at ?? null,
+  };
+
+  // Token:
+  // - Si "t" absent => on autorise (fallback) pour ne pas bloquer le flux.
+  // - Si "t" présent => on vérifie.
+  let okToken = true;
+  if (t) {
+    okToken = verifyContractToken({
       rid,
       email: booking.email,
       secret: BOOKING_MODERATION_SECRET,
       token: t,
     });
+  }
 
   if (!okToken) {
     return (
@@ -134,10 +148,6 @@ export default async function ContractPage(props: PageProps) {
     .maybeSingle();
 
   return (
-    <ContractClient
-      booking={booking as any}
-      token={t}
-      existing={(existing as any) || null}
-    />
+    <ContractClient booking={booking as any} token={t} existing={(existing as any) || null} />
   );
 }
