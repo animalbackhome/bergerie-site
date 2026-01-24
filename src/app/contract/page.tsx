@@ -4,6 +4,17 @@ import { requireSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { BOOKING_MODERATION_SECRET } from "@/lib/resendServer";
 import { verifyContractToken } from "@/lib/contractToken";
 
+
+
+
+// --- UUID helper (added by patch) ---
+const __isUuid = (v: unknown) => {
+  if (typeof v !== "string") return false;
+  // Accept UUID v1-v5, case-insensitive
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim());
+};
+// --- end UUID helper ---
+
 type PageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
@@ -26,7 +37,7 @@ export default async function ContractPage(props: PageProps) {
   const rid = normalizeRid(getParam(props.searchParams, "rid"));
   const t = String(getParam(props.searchParams, "t") || "");
 
-  if (!rid) {
+  if (!rid || !__isUuid(rid)) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="rounded-2xl bg-white/90 p-6 border">
