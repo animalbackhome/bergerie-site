@@ -6,51 +6,41 @@ import { verifyContractToken } from "@/lib/contractToken";
 
 export const dynamic = "force-dynamic";
 
-// --- UUID helper (added by patch) ---
+// --- RID helpers (UUID or positive integer) ---
 const __isUuid = (v: unknown) => {
   if (typeof v !== "string") return false;
-  // Accept UUID v1-v5, case-insensitive
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v.trim()
   );
 };
-// --- end UUID helper ---
 
-type SearchParamsShape = Record<string, string | string[] | undefined> | URLSearchParams;
-
-type PageProps = {
-  // Next.js versions can type this as an object OR a Promise<object>.
-  searchParams?: SearchParamsShape | Promise<SearchParamsShape>;
+const __isPositiveIntString = (v: unknown) => {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  return /^[0-9]+$/.test(s) && Number(s) > 0;
 };
 
-async function resolveSearchParams(
-  searchParams: PageProps["searchParams"]
-): Promise<SearchParamsShape | undefined> {
+type PageProps = {
+  searchParams?: Record<string, string | string[] | undefined> | Promise<Record<string, any>>;
+};
+
+async function resolveSearchParams(searchParams: any) {
   if (!searchParams) return undefined;
-
-  // If a Promise was passed (some Next.js typings), await it.
-  if (typeof (searchParams as any)?.then === "function") {
-    try {
-      return (await (searchParams as any)) as SearchParamsShape;
-    } catch {
-      return undefined;
-    }
-  }
-
-  return searchParams as SearchParamsShape;
+  if (typeof searchParams?.then === "function") return await searchParams;
+  return searchParams;
 }
 
 function getParam(searchParams: any, key: string): string | undefined {
   if (!searchParams) return undefined;
 
   // URLSearchParams-like
-  if (typeof (searchParams as any)?.get === "function") {
-    const v = (searchParams as any).get(key);
+  if (typeof searchParams?.get === "function") {
+    const v = searchParams.get(key);
     return typeof v === "string" ? v : undefined;
   }
 
   // Plain object (Next.js App Router): Record<string, string | string[]>
-  const raw = (searchParams as any)[key];
+  const raw = searchParams[key];
   if (Array.isArray(raw)) return typeof raw[0] === "string" ? raw[0] : undefined;
   return typeof raw === "string" ? raw : undefined;
 }
@@ -58,16 +48,22 @@ function getParam(searchParams: any, key: string): string | undefined {
 function normalizeRid(rid: string | undefined) {
   const s = String(rid || "").trim();
   if (!s) return null;
-  return s;
+
+  // UUID rid (Supabase uuid)
+  if (__isUuid(s)) return s;
+
+  // Numeric rid (legacy / optional)
+  if (__isPositiveIntString(s)) return String(Math.trunc(Number(s)));
+
+  return null;
 }
 
 export default async function ContractPage(props: PageProps) {
-  const sp = await resolveSearchParams(props.searchParams);
-
+  const sp = await resolveSearchParams((props as any).searchParams);
   const rid = normalizeRid(getParam(sp, "rid"));
   const t = String(getParam(sp, "t") || "");
 
-  if (!rid || !__isUuid(rid)) {
+  if (!rid) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-10">
         <div className="rounded-2xl bg-white/90 p-6 border">
@@ -126,10 +122,6 @@ export default async function ContractPage(props: PageProps) {
     .maybeSingle();
 
   return (
-    <ContractClient
-      booking={booking as any}
-      token={t}
-      existing={(existing as any) || null}
-    />
+    <ContractClient booking={booking as any} token={t} existing={(existing as any) || null} />
   );
 }
