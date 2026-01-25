@@ -1,20 +1,23 @@
+// src/app/contract/ContractClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 
 type Booking = {
-  id: string | number; // uuid (string) ou legacy
+  id: string; // UUID
   full_name: string;
   email: string;
   phone?: string;
   arrival_date: string;
   departure_date: string;
-  nights?: number | null;
-  pricing?: any; // on garde any pour ne pas casser ce qui existe
+  pricing?: any;
+  adults_count?: number | null;
+  children_count?: number | null;
+  animals_count?: number | null;
 };
 
 type ExistingContract = {
-  booking_request_id: string | number;
+  booking_request_id: string; // UUID
   signer_address_line1: string;
   signer_address_line2?: string | null;
   signer_postal_code: string;
@@ -42,50 +45,13 @@ function money(v: any) {
   return `${n.toFixed(2)} €`;
 }
 
-function toRidString(v: any) {
-  const s = String(v ?? "").trim();
-  return s.length ? s : "";
-}
-
-/**
- * Essaie de retrouver le nombre de personnes demandé, sans casser le schéma existant.
- * (On cherche dans booking.pricing puis quelques variantes courantes)
- */
-function getExpectedGuests(booking: Booking): number | null {
-  const p: any = (booking as any)?.pricing ?? {};
-  const candidates = [
-    (booking as any)?.guests,
-    (booking as any)?.guest_count,
-    (booking as any)?.people,
-    (booking as any)?.persons,
-    p?.guests,
-    p?.guest_count,
-    p?.people,
-    p?.persons,
-    p?.nb_people,
-    p?.nb_personnes,
-  ];
-  for (const c of candidates) {
-    const n = Number(c);
-    if (Number.isFinite(n) && n > 0) return Math.trunc(n);
-  }
-  return null;
-}
-
-function calcAcompte(total: any) {
-  const n = Number(total);
-  if (!Number.isFinite(n)) return null;
-  const acompte = Math.round(n * 0.3 * 100) / 100;
-  return acompte;
+function safeNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 export default function ContractClient({ booking, token, existing }: Props) {
   const isSigned = Boolean(existing?.signed_at);
-
-  // IMPORTANT: rid doit rester EXACTEMENT celui de l’URL / DB (UUID)
-  const rid = useMemo(() => toRidString(booking?.id), [booking?.id]);
-
-  const expectedGuests = useMemo(() => getExpectedGuests(booking), [booking]);
 
   const [address1, setAddress1] = useState(existing?.signer_address_line1 || "");
   const [address2, setAddress2] = useState(existing?.signer_address_line2 || "");
@@ -93,28 +59,34 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
 
+  const expectedOccupants = useMemo(() => {
+    const a = safeNumber(booking.adults_count) ?? 0;
+    const c = safeNumber(booking.children_count) ?? 0;
+    const total = a + c;
+    return total > 0 ? total : null;
+  }, [booking.adults_count, booking.children_count]);
+
   const initialOccupants = useMemo(() => {
     if (existing?.occupants?.length) return existing.occupants;
 
-    // Par défaut : la personne qui réserve (âge à compléter)
     const parts = (booking.full_name || "").trim().split(/\s+/);
     const first_name = parts.slice(0, -1).join(" ") || parts[0] || "";
     const last_name = parts.slice(-1).join(" ") || "";
 
     const base = [{ first_name, last_name, age: "" }];
 
-    // Si on connait le nombre de personnes, on crée EXACTEMENT le bon nombre de lignes
-    if (expectedGuests && expectedGuests > 1) {
-      const extra = Array.from({ length: expectedGuests - 1 }).map(() => ({
-        first_name: "",
-        last_name: "",
-        age: "",
-      }));
-      return [...base, ...extra];
+    if (expectedOccupants && expectedOccupants > 1) {
+      return [
+        ...base,
+        ...Array.from({ length: expectedOccupants - 1 }).map(() => ({
+          first_name: "",
+          last_name: "",
+          age: "",
+        })),
+      ];
     }
-
     return base;
-  }, [existing, booking.full_name, expectedGuests]);
+  }, [existing, booking.full_name, expectedOccupants]);
 
   const [occupants, setOccupants] = useState(initialOccupants);
   const [accepted, setAccepted] = useState(false);
@@ -122,74 +94,59 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Popup RIB après signature
-  const [showRib, setShowRib] = useState(false);
-
   useEffect(() => {
     setOccupants(initialOccupants);
-    setAccepted(false);
-    setSuccess(false);
-    setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rid]);
+  }, [booking.id]);
 
   function updateOcc(i: number, key: "first_name" | "last_name" | "age", value: string) {
     setOccupants((prev) => prev.map((o, idx) => (idx === i ? { ...o, [key]: value } : o)));
   }
 
   function addOcc() {
-    // Si le nombre est imposé, on interdit l’ajout (exactement N personnes)
-    if (expectedGuests) return;
     setOccupants((prev) => [...prev, { first_name: "", last_name: "", age: "" }]);
   }
 
   function removeOcc(i: number) {
-    // Si le nombre est imposé, on interdit la suppression (exactement N personnes)
-    if (expectedGuests) return;
     setOccupants((prev) => prev.filter((_, idx) => idx !== i));
   }
 
-  function validateBeforeSubmit(): string | null {
-    if (!rid) return "Missing rid";
-    if (!accepted) return "Veuillez cocher la case d’acceptation.";
-    if (!address1.trim()) return "Adresse (ligne 1) obligatoire.";
-    if (!zip.trim()) return "Code postal obligatoire.";
-    if (!city.trim()) return "Ville obligatoire.";
-    if (!country.trim()) return "Pays obligatoire.";
+  const total = booking?.pricing?.total != null ? Number(booking.pricing.total) : null;
+  const acompte30 = total != null && Number.isFinite(total) ? Math.round(total * 0.3 * 100) / 100 : null;
+  const solde70 = total != null && Number.isFinite(total) ? Math.round((total - (acompte30 ?? 0)) * 100) / 100 : null;
 
-    // Nombre de personnes EXACT
-    if (expectedGuests && occupants.length !== expectedGuests) {
-      return `Vous devez renseigner exactement ${expectedGuests} personne(s).`;
-    }
+  const occupantsFilled = useMemo(() => {
+    return occupants
+      .map((o) => ({
+        first_name: String(o.first_name || "").trim(),
+        last_name: String(o.last_name || "").trim(),
+        age: String(o.age || "").trim(),
+      }))
+      .filter((o) => o.first_name && o.last_name && o.age);
+  }, [occupants]);
 
-    // Champs occupants obligatoires
-    for (let i = 0; i < occupants.length; i++) {
-      const o = occupants[i];
-      if (!String(o.first_name || "").trim()) return `Prénom manquant (personne #${i + 1}).`;
-      if (!String(o.last_name || "").trim()) return `Nom manquant (personne #${i + 1}).`;
-      if (!String(o.age || "").trim()) return `Âge manquant (personne #${i + 1}).`;
-    }
+  const occupantsCountOk = useMemo(() => {
+    if (!expectedOccupants) return occupantsFilled.length >= 1;
+    return occupantsFilled.length === expectedOccupants;
+  }, [expectedOccupants, occupantsFilled.length]);
 
-    return null;
-  }
+  const canSubmit = useMemo(() => {
+    if (isSigned) return false;
+    if (!accepted) return false;
+    if (!address1.trim() || !zip.trim() || !city.trim() || !country.trim()) return false;
+    if (!occupantsCountOk) return false;
+    return true;
+  }, [isSigned, accepted, address1, zip, city, country, occupantsCountOk]);
 
   async function submit() {
     setError(null);
-
-    const v = validateBeforeSubmit();
-    if (v) {
-      setError(v);
-      return;
-    }
-
     setLoading(true);
     try {
       const res = await fetch("/api/contract", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          // IMPORTANT: rid doit être une string UUID (pas number)
-          rid,
+          rid: booking.id, // UUID
           t: token,
           signer_address_line1: address1,
           signer_address_line2: address2,
@@ -200,15 +157,11 @@ export default function ContractClient({ booking, token, existing }: Props) {
           accepted_terms: accepted,
         }),
       });
-
-      const data = await res.json().catch(() => null);
-
+      const data = await res.json();
       if (!res.ok || !data?.ok) {
         throw new Error(data?.error || "Erreur inconnue");
       }
-
       setSuccess(true);
-      setShowRib(true);
     } catch (e: any) {
       setError(e?.message || "Erreur");
     } finally {
@@ -216,354 +169,597 @@ export default function ContractClient({ booking, token, existing }: Props) {
     }
   }
 
-  const total = booking?.pricing?.total;
-  const acompte = calcAcompte(total);
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-sky-900 via-sky-800 to-slate-950">
-      {/* Header bleu en haut (comme demandé) */}
-      <div className="w-full bg-gradient-to-r from-sky-700 via-blue-700 to-indigo-700">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          <div className="text-white/90 text-sm">Superbe bergerie • Contrat de location</div>
-          <h1 className="text-white text-2xl md:text-3xl font-semibold mt-1">
+    <div className="min-h-[100vh] bg-[#053B5A]">
+      {/* Header bleu plus sombre */}
+      <div className="bg-gradient-to-r from-[#052E4A] via-[#083A5F] to-[#1D2DAA]">
+        <div className="max-w-4xl mx-auto px-4 py-10">
+          <div className="text-white/80 text-sm">Superbe bergerie • Contrat de location</div>
+          <h1 className="text-white text-3xl md:text-4xl font-bold mt-1">
             Contrat de location saisonnière
           </h1>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="rounded-2xl bg-white shadow-lg border border-white/40 overflow-hidden">
-          <div className="p-6">
-            <p className="text-sm text-slate-700">
-              Les informations importantes (dates, prix, réservation) sont verrouillées.
-            </p>
+      <div className="max-w-4xl mx-auto px-4 pb-10 -mt-6">
+        <div className="rounded-2xl bg-white shadow-xl border border-white/60 p-6">
+          <p className="text-sm text-slate-700">
+            Les informations importantes (dates, prix, réservation) sont verrouillées.
+          </p>
 
-            <div className="mt-6 grid md:grid-cols-2 gap-4">
-              <div className="rounded-xl border border-slate-200 p-4 bg-white">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Réservation</div>
-                <div className="mt-2 text-sm text-slate-900 space-y-1">
+          <div className="mt-6 grid md:grid-cols-2 gap-4">
+            <div className="rounded-xl border p-4 bg-white">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Réservation</div>
+              <div className="mt-2 text-sm space-y-1">
+                <div>
+                  <b>Nom</b> : {booking.full_name}
+                </div>
+                <div>
+                  <b>Email</b> : {booking.email}
+                </div>
+                {booking.phone ? (
                   <div>
-                    <b>Nom</b> : {booking.full_name}
+                    <b>Téléphone</b> : {booking.phone}
                   </div>
+                ) : null}
+                <div className="mt-2">
+                  <b>Dates</b> : {formatDateFR(booking.arrival_date)} → {formatDateFR(booking.departure_date)}
+                </div>
+                {booking?.pricing?.total != null ? (
                   <div>
-                    <b>Email</b> : {booking.email}
+                    <b>Total</b> : {money(booking.pricing.total)}
                   </div>
-                  {booking.phone ? (
-                    <div>
-                      <b>Téléphone</b> : {booking.phone}
-                    </div>
-                  ) : null}
-                  <div className="mt-2">
-                    <b>Dates</b> : {formatDateFR(booking.arrival_date)} →{" "}
-                    {formatDateFR(booking.departure_date)}
+                ) : null}
+                {expectedOccupants ? (
+                  <div>
+                    <b>Personnes</b> : {expectedOccupants}
+                    {booking.animals_count ? ` • Animaux : ${booking.animals_count}` : ""}
                   </div>
-                  {booking?.pricing?.total != null ? (
-                    <div>
-                      <b>Total</b> : {money(booking.pricing.total)}
-                    </div>
-                  ) : null}
-                  {expectedGuests ? (
-                    <div>
-                      <b>Nombre de personnes</b> : {expectedGuests}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 p-4 bg-white">
-                <div className="text-xs uppercase tracking-wide text-slate-500">
-                  Votre adresse postale
-                </div>
-
-                <div className="mt-2 space-y-2">
-                  <input
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                    placeholder="Adresse (ligne 1) *"
-                    value={address1}
-                    onChange={(e) => setAddress1(e.target.value)}
-                    disabled={isSigned}
-                  />
-                  <input
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                    placeholder="Complément (optionnel)"
-                    value={address2}
-                    onChange={(e) => setAddress2(e.target.value)}
-                    disabled={isSigned}
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                      placeholder="Code postal *"
-                      value={zip}
-                      onChange={(e) => setZip(e.target.value)}
-                      disabled={isSigned}
-                    />
-                    <input
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                      placeholder="Ville *"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      disabled={isSigned}
-                    />
-                  </div>
-                  <input
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                    placeholder="Pays *"
-                    value={country}
-                    onChange={(e) => setCountry(e.target.value)}
-                    disabled={isSigned}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Contrat complet (lisible, mobile, pro) */}
-            <div className="mt-6 rounded-xl border border-slate-200 p-4 bg-white">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Contrat (à lire)</div>
-
-              <div className="mt-3 text-slate-900 text-sm leading-relaxed space-y-4">
-                <div>
-                  <div className="font-semibold">1) Parties</div>
-                  <div className="mt-2 space-y-1">
-                    <div>
-                      <b>Propriétaire (Bailleur)</b> : Superbe bergerie, forêt, piscine & lac (coordonnées
-                      communiquées au locataire).
-                    </div>
-                    <div>
-                      <b>Locataire</b> : <span className="font-medium">{booking.full_name}</span> —{" "}
-                      <span className="font-medium">{booking.email}</span>
-                      {booking.phone ? <> — {booking.phone}</> : null}
-                    </div>
-                    <div className="text-slate-700">
-                      Le locataire déclare être majeur et avoir la capacité de contracter.
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">2) Logement loué</div>
-                  <div className="mt-2 text-slate-800">
-                    Désignation : Location saisonnière meublée. Capacité maximale : 8 personnes (voir
-                    Article 14). Le logement est loué à titre de résidence de vacances.
-                  </div>
-                  <div className="mt-2 text-slate-800">
-                    Annexes : (1) État descriptif (site) • (2) Inventaire (site) • (3) Règlement intérieur
-                    (à signer) • (4) État des lieux entrée/sortie (sur place).
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">3) Durée — Dates — Horaires</div>
-                  <div className="mt-2 text-slate-800">
-                    Période : du <b>{formatDateFR(booking.arrival_date)}</b> au{" "}
-                    <b>{formatDateFR(booking.departure_date)}</b>
-                    {booking.nights != null ? <> pour <b>{booking.nights}</b> nuits</> : null}.
-                  </div>
-                  <div className="mt-2 text-slate-800">
-                    Arrivée (check-in) : 16h–18h • Départ (check-out) : 10h max.
-                    <div className="mt-1 text-slate-700">
-                      Options : arrivée début de journée (+70€) / départ fin de journée (+70€) selon accord.
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">4) Prix — Taxes — Prestations</div>
-                  <div className="mt-2 text-slate-800">
-                    Prix total du séjour : <b>{total != null ? money(total) : "—"}</b> comprenant :
-                    hébergement + forfait ménage 100€ + options éventuelles + taxe de séjour (si applicable).
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)</div>
-                  <div className="mt-2 text-slate-800 space-y-2">
-                    <div>Mode de paiement : virement bancaire uniquement (aucun chèque).</div>
-                    <div>
-                      <b>5.1 Acompte (30%)</b> : pour bloquer les dates, le locataire verse un acompte de 30%
-                      du prix total (acompte, et non arrhes).
-                      {acompte != null ? (
-                        <>
-                          {" "}
-                          Montant estimé : <b>{money(acompte)}</b>.
-                        </>
-                      ) : null}
-                    </div>
-                    <div>
-                      <b>5.2 Solde</b> : le solde doit être réglé au plus tard 7 jours avant l’entrée dans
-                      les lieux.
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">8) Annulation / Non-présentation / Séjour écourté</div>
-                  <div className="mt-2 text-slate-800">
-                    L’acompte reste acquis. Après paiement du solde (J-7), aucun remboursement n’est dû. En
-                    cas de no-show, règles applicables selon le contrat complet.
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-semibold">12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)</div>
-                  <div className="mt-2 text-slate-800">
-                    Restitution après état des lieux de sortie, déduction faite des sommes dues en cas de
-                    dégradations/pertes/casse/nettoyage anormal.
-                  </div>
-                </div>
-
-                <div className="text-slate-700 text-xs">
-                  Note : Le texte complet sera envoyé en PDF dans l’email de confirmation (signature en
-                  ligne ci-dessous).
-                </div>
-              </div>
-            </div>
-
-            {/* Occupants */}
-            <div className="mt-6 rounded-xl border border-slate-200 p-4 bg-white">
-              <div className="text-xs uppercase tracking-wide text-slate-500">
-                Personnes présentes pendant la location (Nom, Prénom, Âge)
-              </div>
-
-              {expectedGuests ? (
-                <div className="mt-2 text-sm text-slate-700">
-                  Vous devez renseigner <b>exactement {expectedGuests}</b> personne(s).
-                </div>
-              ) : null}
-
-              <div className="mt-3 space-y-2">
-                {occupants.map((o, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                    <input
-                      className="col-span-12 md:col-span-5 rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                      placeholder="Prénom *"
-                      value={o.first_name}
-                      onChange={(e) => updateOcc(i, "first_name", e.target.value)}
-                      disabled={isSigned}
-                    />
-                    <input
-                      className="col-span-12 md:col-span-5 rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                      placeholder="Nom *"
-                      value={o.last_name}
-                      onChange={(e) => updateOcc(i, "last_name", e.target.value)}
-                      disabled={isSigned}
-                    />
-                    <input
-                      className="col-span-12 md:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-slate-900 placeholder:text-slate-400"
-                      placeholder="Âge *"
-                      value={o.age}
-                      onChange={(e) => updateOcc(i, "age", e.target.value)}
-                      disabled={isSigned}
-                    />
-
-                    {!isSigned && !expectedGuests && occupants.length > 1 ? (
-                      <button
-                        type="button"
-                        className="col-span-12 text-left text-sm text-red-600 hover:underline"
-                        onClick={() => removeOcc(i)}
-                      >
-                        Supprimer cette personne
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-
-                {!isSigned && !expectedGuests ? (
-                  <button
-                    type="button"
-                    className="text-sm text-blue-700 hover:underline"
-                    onClick={addOcc}
-                  >
-                    + Ajouter une personne
-                  </button>
                 ) : null}
               </div>
             </div>
 
-            {/* Signature */}
-            <div className="mt-6 rounded-xl border border-slate-200 p-4 bg-white">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Signature</div>
+            <div className="rounded-xl border p-4 bg-white">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Votre adresse postale</div>
 
-              {isSigned ? (
-                <p className="mt-2 text-green-700 font-medium">Contrat déjà signé ✅</p>
-              ) : (
-                <label className="mt-3 flex gap-2 items-start text-sm text-slate-800">
+              <div className="mt-2 space-y-2">
+                <input
+                  className="w-full rounded-lg border px-3 py-2"
+                  placeholder="Adresse (ligne 1) *"
+                  value={address1}
+                  onChange={(e) => setAddress1(e.target.value)}
+                  disabled={isSigned}
+                />
+                <input
+                  className="w-full rounded-lg border px-3 py-2"
+                  placeholder="Complément (optionnel)"
+                  value={address2}
+                  onChange={(e) => setAddress2(e.target.value)}
+                  disabled={isSigned}
+                />
+                <div className="grid grid-cols-2 gap-2">
                   <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={accepted}
-                    onChange={(e) => setAccepted(e.target.checked)}
+                    className="w-full rounded-lg border px-3 py-2"
+                    placeholder="Code postal *"
+                    value={zip}
+                    onChange={(e) => setZip(e.target.value)}
+                    disabled={isSigned}
                   />
-                  <span>J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.</span>
-                </label>
-              )}
-
-              {error ? (
-                <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                  {error}
+                  <input
+                    className="w-full rounded-lg border px-3 py-2"
+                    placeholder="Ville *"
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    disabled={isSigned}
+                  />
                 </div>
-              ) : null}
+                <input
+                  className="w-full rounded-lg border px-3 py-2"
+                  placeholder="Pays *"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  disabled={isSigned}
+                />
+              </div>
+            </div>
+          </div>
 
-              {success ? (
-                <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
-                  Contrat envoyé ✅ (un email de confirmation a été envoyé).
+          {/* CONTRAT ENTIER */}
+          <div className="mt-6 rounded-xl border p-4 bg-white">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Contrat (à lire)</div>
+
+            <div className="mt-3 rounded-lg border bg-slate-50 p-4 text-[14px] leading-6 text-slate-900 max-h-[55vh] overflow-auto">
+              <div className="font-semibold mb-3">CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —</div>
+
+              <div className="font-semibold">1) Parties</div>
+              <div className="mt-1">
+                <div>
+                  <b>Propriétaire (Bailleur)</b>
                 </div>
-              ) : null}
+                <div>Nom / Prénom : []</div>
+                <div>Adresse : []</div>
+                <div>E-mail : []</div>
+                <div>Téléphone : []</div>
+
+                <div className="mt-3">
+                  <b>Locataire</b>
+                </div>
+                <div>Nom / Prénom : {booking.full_name}</div>
+                <div>Adresse : (renseignée ci-dessus)</div>
+                <div>E-mail : {booking.email}</div>
+                <div>Téléphone : {booking.phone || "—"}</div>
+
+                <div className="mt-2">
+                  Le locataire déclare être majeur et avoir la capacité de contracter.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">2) Logement loué</div>
+              <div className="mt-1">
+                <div>Désignation : Location saisonnière meublée</div>
+                <div>Adresse du logement : [____________________]</div>
+                <div>Capacité maximale : 8 personnes (voir Article 11).</div>
+                <div>
+                  Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en
+                  prévaloir comme résidence principale.
+                </div>
+                <div className="mt-2">
+                  Annexes (faisant partie intégrante du contrat) :
+                </div>
+                <div>Annexe 1 : État descriptif du logement (repris du site)</div>
+                <div>Annexe 2 : Inventaire / liste équipements (repris du site)</div>
+                <div>Annexe 3 : Règlement intérieur (repris et signé)</div>
+                <div>Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)</div>
+              </div>
+
+              <div className="mt-5 font-semibold">3) Durée — Dates — Horaires</div>
+              <div className="mt-1">
+                <div>
+                  Période : du {formatDateFR(booking.arrival_date)} au {formatDateFR(booking.departure_date)} pour{" "}
+                  {booking?.pricing?.nights ?? "X"} nuits.
+                </div>
+                <div className="mt-2 font-semibold">Horaires standard (selon ton site)</div>
+                <div>Arrivée (check-in) : entre 16h et 18h</div>
+                <div>Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)</div>
+                <div className="mt-2 font-semibold">Options (si accord préalable et selon disponibilités) :</div>
+                <div>Arrivée début de journée : +70€</div>
+                <div>Départ fin de journée : +70€</div>
+              </div>
+
+              <div className="mt-5 font-semibold">4) Prix — Taxes — Prestations</div>
+              <div className="mt-1">
+                <div>
+                  Prix total du séjour : {total != null ? money(total) : "[____ €]"} comprenant :
+                </div>
+                <div>Hébergement : [____ €]</div>
+                <div>Forfait ménage : 100€</div>
+                <div>Options éventuelles : [____ €]</div>
+                <div>Taxe de séjour : [____ €] (si applicable / selon règles locales)</div>
+              </div>
+
+              <div className="mt-5 font-semibold">5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)</div>
+              <div className="mt-1">
+                <div>
+                  Mode de paiement : virement bancaire uniquement. Aucun paiement par chèque n’est accepté.
+                </div>
+                <div className="mt-2 font-semibold">5.1 Acompte (30%)</div>
+                <div>
+                  Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit{" "}
+                  {acompte30 != null ? money(acompte30) : "[____ €]"}.
+                </div>
+                <div>
+                  ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un{" "}
+                  <b>ACOMPTE</b> et non des arrhes.
+                </div>
+                <div className="mt-2 font-semibold">5.2 Solde</div>
+                <div>
+                  Le solde, soit {solde70 != null ? money(solde70) : "[____ €]"}, doit être réglé au plus tard 7
+                  jours avant l’entrée dans les lieux.
+                </div>
+                <div>
+                  À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de
+                  relance, le propriétaire pourra considérer la réservation comme annulée par le locataire,
+                  l’acompte restant acquis au propriétaire.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">6) Formation du contrat — Réservation</div>
+              <div className="mt-1">
+                <div>La réservation devient effective dès réception :</div>
+                <div>du présent contrat signé, et</div>
+                <div>de l’acompte de 30%.</div>
+                <div>Le solde reste exigible selon l’Article 5.2.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">7) Absence de droit de rétractation</div>
+              <div className="mt-1">
+                <div>
+                  Le locataire est informé que, pour une prestation d’hébergement fournie à une date déterminée,
+                  il ne bénéficie pas d’un droit de rétractation.
+                </div>
+                <div>➡️ Les conditions d’annulation applicables sont celles prévues à l’Article 8.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">8) Annulation / Non-présentation / Séjour écourté</div>
+              <div className="mt-1">
+                <div className="font-semibold">8.1 Annulation par le locataire</div>
+                <div>Toute annulation doit être notifiée par écrit (e-mail + recommandé conseillé).</div>
+                <div>a) Quel que soit le motif, l’acompte de 30% reste définitivement acquis au propriétaire.</div>
+                <div>
+                  b) À compter du paiement du solde (J-7 avant l’arrivée), aucun remboursement ne sera effectué,
+                  quel que soit le motif d’annulation ou d’empêchement, et le locataire reste redevable de la
+                  totalité du séjour.
+                </div>
+                <div>c) Si le séjour est écourté, aucun remboursement n’est dû.</div>
+
+                <div className="mt-2 font-semibold">8.2 Non-présentation (“no-show”)</div>
+                <div>Si le locataire ne se manifeste pas et n’a pas convenu d’une arrivée différée :</div>
+                <div>à partir de minuit (00h00) le jour d’arrivée, l’entrée dans les lieux n’est plus possible ;</div>
+                <div>
+                  si le locataire ne donne aucune nouvelle avant le lendemain 10h, le propriétaire peut considérer
+                  la réservation comme annulée, disposer du logement, et conserver les sommes versées (hors taxe
+                  de séjour si non due).
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">9) Annulation par le propriétaire</div>
+              <div className="mt-1">
+                <div>
+                  En cas d’annulation par le propriétaire (hors force majeure), celui-ci remboursera au locataire
+                  l’intégralité des sommes effectivement versées dans un délai de 7 jours.
+                </div>
+                <div>Aucune indemnité forfaitaire supplémentaire n’est due.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">10) Force majeure</div>
+              <div className="mt-1">
+                <div>
+                  Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un
+                  événement répondant à la définition de la force majeure (événement échappant au contrôle,
+                  imprévisible et irrésistible).
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">11) État des lieux — Ménage — Entretien</div>
+              <div className="mt-1">
+                <div>
+                  Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
+                </div>
+                <div>
+                  Le ménage de fin de séjour est assuré par le propriétaire dans la limite d’un usage normal.
+                </div>
+                <div>
+                  Le barbecue/plancha doivent être rendus propres. Les frais de remise en état, nettoyage
+                  exceptionnel, ou dégradations peuvent être facturés.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)</div>
+              <div className="mt-1">
+                <div>Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée.</div>
+                <div>
+                  Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre :
+                </div>
+                <div>dégradations, pertes, casse, nettoyage anormal, non-respect du règlement intérieur.</div>
+                <div>
+                  En cas de retenue, le propriétaire pourra fournir, selon le cas, photos + devis/factures justifiant
+                  la retenue.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">13) Identité du locataire</div>
+              <div className="mt-1">
+                <div>
+                  À l’arrivée, le locataire s’engage à présenter une pièce d’identité au nom de la personne ayant
+                  réservé, uniquement pour vérification d’identité.
+                </div>
+                <div>Aucun numéro de pièce n’est relevé ni conservé.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">14) Capacité — Personnes supplémentaires — Visiteurs</div>
+              <div className="mt-1">
+                <div>Capacité maximale : 8 personnes.</div>
+                <div>
+                  Toute personne supplémentaire non autorisée peut entraîner la résiliation immédiate sans
+                  remboursement.
+                </div>
+                <div>Supplément : 50€/personne/nuit et 50€/personne en journée (même sans nuitée), selon accord préalable.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">15) Animaux</div>
+              <div className="mt-1">
+                <div>Animaux acceptés selon conditions.</div>
+                <div>Supplément : 10€ par chien et par nuit (à régler à l’arrivée, sauf indication contraire).</div>
+                <div>
+                  Le locataire s’engage à maintenir la propreté, éviter toute dégradation et ramasser les déjections
+                  à l’extérieur.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">16) Caméras (information)</div>
+              <div className="mt-1">
+                <div>
+                  Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs (entrée/accès), à des fins de sécurité.
+                </div>
+                <div>Aucune caméra n’est présente à l’intérieur du logement.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">17) Assurance</div>
+              <div className="mt-1">
+                <div>
+                  Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent).
+                </div>
+                <div>Il est conseillé de souscrire une assurance annulation.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">18) Utilisation paisible — Règlement intérieur</div>
+              <div className="mt-1">
+                <div>
+                  Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">19) Cession / Sous-location</div>
+              <div className="mt-1">
+                <div>
+                  La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
+                </div>
+              </div>
+
+              <div className="mt-5 font-semibold">20) Litiges</div>
+              <div className="mt-1">
+                <div>
+                  Contrat entre particuliers. En cas de difficulté, les parties recherchent une solution amiable.
+                </div>
+                <div>À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.</div>
+              </div>
+
+              <div className="mt-5 font-semibold">Signatures</div>
+              <div className="mt-1">
+                <div>Fait à [ville], le [date].</div>
+                <div>En 2 exemplaires.</div>
+                <div className="mt-2">
+                  Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
+                </div>
+                <div>[____________________]</div>
+                <div className="mt-2">
+                  Le Locataire (signature précédée de la mention “Lu et approuvé”) :
+                </div>
+                <div>[____________________]</div>
+              </div>
+
+              <div className="mt-6 font-semibold">ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)</div>
+              <div className="mt-1">
+                (On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
+              </div>
+
+              <div className="mt-6 font-semibold">✅ Structure du contrat (version actuelle — “ma base”)</div>
+              <div className="mt-1">
+                <div>Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide :</div>
+                <div className="mt-2">
+                  <b>A)</b> Identification des parties
+                  <div>Propriétaire (bailleur) : identité + coordonnées</div>
+                  <div>Locataire : identité + coordonnées</div>
+                  <div>Déclaration de capacité à contracter</div>
+                </div>
+                <div className="mt-2">
+                  <b>B)</b> Désignation de la location
+                  <div>Nature : location saisonnière meublée</div>
+                  <div>Adresse / capacité / usage (résidence de vacances)</div>
+                </div>
+                <div className="mt-2">
+                  <b>C)</b> Durée — Dates — Horaires
+                  <div>Dates du séjour + nombre de nuits</div>
+                  <div>Horaires conformes au site : arrivée 16h–18h • départ 10h max</div>
+                  <div>Options possibles : arrivée début de journée (+70€) / départ fin de journée (+70€) selon disponibilité</div>
+                </div>
+                <div className="mt-2">
+                  <b>D)</b> Prix — Taxes — Prestations
+                  <div>Détail du prix total</div>
+                  <div>Forfait ménage fixe : 100€</div>
+                  <div>Taxe de séjour (si applicable) + options éventuelles</div>
+                </div>
+                <div className="mt-2">
+                  <b>E)</b> Paiement (virement uniquement)
+                  <div>Paiement par RIB uniquement (pas de chèque)</div>
+                  <div>Acompte 30% : qualifié explicitement comme acompte (et non arrhes)</div>
+                  <div>Solde à payer au plus tard 7 jours avant l’arrivée</div>
+                </div>
+                <div className="mt-2">
+                  <b>F)</b> Réservation / engagement
+                  <div>Réservation effective à réception : contrat signé + acompte payé</div>
+                  <div>Le solde reste exigible selon les délais prévus</div>
+                </div>
+                <div className="mt-2">
+                  <b>G)</b> Pas de droit de rétractation
+                  <div>Mention spécifique à l’hébergement à date déterminée</div>
+                  <div>Renvoi clair aux conditions d’annulation</div>
+                </div>
+                <div className="mt-2">
+                  <b>H)</b> Annulation / No-show / séjour écourté (protection maximale)
+                  <div>Acompte : non remboursable</div>
+                  <div>Après paiement du solde (J-7) : aucun remboursement, quel que soit le motif</div>
+                  <div>No-show : entrée impossible à partir de minuit, règles de disposition du logement ensuite</div>
+                </div>
+                <div className="mt-2">
+                  <b>I)</b> Annulation par le propriétaire
+                  <div>Remboursement intégral des sommes versées</div>
+                  <div>Pas d’indemnité forfaitaire</div>
+                </div>
+                <div className="mt-2">
+                  <b>J)</b> État des lieux / entretien / ménage
+                  <div>État des lieux d’entrée + sortie signé</div>
+                  <div>Conditions ménage + remise en état si abus/dégradations</div>
+                </div>
+                <div className="mt-2">
+                  <b>K)</b> Caution / dépôt de garantie
+                  <div>Caution : 500€ en liquide à l’arrivée</div>
+                  <div>Restitution après état des lieux de sortie</div>
+                  <div>Retenues possibles (dégradations/pertes/ménage anormal), justificatifs possibles (photos + devis/factures si nécessaire)</div>
+                </div>
+                <div className="mt-2">
+                  <b>L)</b> Vérification d’identité
+                  <div>À l’arrivée : présentation d’une pièce d’identité au nom du réservant</div>
+                  <div>Aucun numéro de pièce relevé</div>
+                </div>
+                <div className="mt-2">
+                  <b>M)</b> Capacité / personnes supplémentaires / visiteurs
+                  <div>Max 8 personnes</div>
+                  <div>Surcoûts : 50€/pers/nuit + 50€/visiteur journée (même sans nuitée)</div>
+                  <div>Interdiction personnes non déclarées</div>
+                </div>
+                <div className="mt-2">
+                  <b>N)</b> Animaux
+                  <div>Acceptés sous conditions</div>
+                  <div>Supplément : 10€/chien/nuit (à régler à l’arrivée)</div>
+                </div>
+                <div className="mt-2">
+                  <b>O)</b> Caméras
+                  <div>Présence de caméras uniquement sur les accès extérieurs (information obligatoire)</div>
+                </div>
+                <div className="mt-2">
+                  <b>P)</b> Assurance
+                  <div>Responsabilité civile villégiature conseillée / exigée</div>
+                </div>
+                <div className="mt-2">
+                  <b>Q)</b> Utilisation paisible + règlement intérieur
+                  <div>Respect du règlement intérieur obligatoire</div>
+                  <div>Interdictions et règles détaillées</div>
+                </div>
+                <div className="mt-2">
+                  <b>R)</b> Cession / sous-location
+                  <div>Interdite sans accord écrit</div>
+                </div>
+                <div className="mt-2">
+                  <b>S)</b> Litiges
+                  <div>Recherche d’accord amiable</div>
+                  <div>Compétence selon règles de droit commun</div>
+                </div>
+
+                <div className="mt-4 font-semibold">2) Annexes (très important)</div>
+                <div className="mt-1">
+                  <div>Le contrat est complété par des annexes qui font partie intégrante du dossier :</div>
+                  <div>Annexe 1 — État descriptif du logement : informations détaillées (surface, équipements, prestations), pouvant être repris automatiquement depuis le site</div>
+                  <div>Annexe 2 — Inventaire : liste équipements/objets, pouvant aussi être générée depuis la base du site</div>
+                  <div>Annexe 3 — Règlement intérieur : le règlement complet à valider avant location</div>
+                  <div>Annexe 4 — État des lieux d’entrée / sortie : document signé sur place</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* OCCUPANTS */}
+          <div className="mt-6 rounded-xl border p-4 bg-white">
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Personnes présentes pendant la location (Nom, Prénom, Âge)
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {occupants.map((o, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                  <input
+                    className="col-span-5 rounded-lg border px-3 py-2"
+                    placeholder="Prénom *"
+                    value={o.first_name}
+                    onChange={(e) => updateOcc(i, "first_name", e.target.value)}
+                    disabled={isSigned}
+                  />
+                  <input
+                    className="col-span-5 rounded-lg border px-3 py-2"
+                    placeholder="Nom *"
+                    value={o.last_name}
+                    onChange={(e) => updateOcc(i, "last_name", e.target.value)}
+                    disabled={isSigned}
+                  />
+                  <input
+                    className="col-span-2 rounded-lg border px-3 py-2"
+                    placeholder="Âge *"
+                    value={o.age}
+                    onChange={(e) => updateOcc(i, "age", e.target.value)}
+                    disabled={isSigned}
+                  />
+
+                  {!isSigned && occupants.length > 1 ? (
+                    <button
+                      type="button"
+                      className="col-span-12 text-left text-sm text-red-600 hover:underline"
+                      onClick={() => removeOcc(i)}
+                    >
+                      Supprimer cette personne
+                    </button>
+                  ) : null}
+                </div>
+              ))}
 
               {!isSigned ? (
                 <button
                   type="button"
-                  className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 text-white px-4 py-3 font-semibold disabled:opacity-60"
-                  onClick={submit}
-                  disabled={loading}
+                  className="text-sm text-blue-700 hover:underline disabled:opacity-50"
+                  onClick={addOcc}
+                  disabled={expectedOccupants != null && occupants.length >= expectedOccupants}
                 >
-                  {loading ? "Envoi…" : "Signer et envoyer le contrat"}
+                  + Ajouter une personne
                 </button>
               ) : null}
+            </div>
+          </div>
 
-              <div className="mt-4 text-xs text-slate-600">
-                En signant, vous ne pouvez pas modifier les dates, tarifs ou informations clés de la réservation.
+          {/* SIGNATURE */}
+          <div className="mt-6 rounded-xl border p-4 bg-white">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Signature</div>
+
+            {isSigned ? (
+              <p className="mt-2 text-green-700 font-medium">Contrat déjà signé ✅</p>
+            ) : (
+              <label className="mt-3 flex gap-2 items-start text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={accepted}
+                  onChange={(e) => setAccepted(e.target.checked)}
+                />
+                <span>
+                  J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.
+                </span>
+              </label>
+            )}
+
+            {!occupantsCountOk ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {expectedOccupants
+                  ? `Vous devez renseigner exactement ${expectedOccupants} personne(s), comme dans votre demande.`
+                  : "Ajoutez au moins une personne (nom, prénom, âge)."}
               </div>
+            ) : null}
+
+            {error ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            ) : null}
+
+            {success ? (
+              <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+                Contrat envoyé ✅ (un email de confirmation a été envoyé).
+              </div>
+            ) : null}
+
+            {!isSigned ? (
+              <button
+                type="button"
+                className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 text-white px-4 py-3 font-semibold disabled:opacity-60"
+                onClick={submit}
+                disabled={loading || !canSubmit}
+              >
+                {loading ? "Envoi…" : "Signer et envoyer le contrat"}
+              </button>
+            ) : null}
+
+            <div className="mt-3 text-xs text-slate-500">
+              En signant, vous ne pouvez pas modifier les dates, tarifs ou informations clés de la réservation.
             </div>
           </div>
         </div>
-
-        {/* Modal RIB après signature */}
-        {showRib && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <div className="absolute inset-0 bg-black/60" onClick={() => setShowRib(false)} />
-            <div className="relative z-10 w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
-              <div className="text-lg font-semibold text-slate-900">Acompte à régler (30%)</div>
-              <div className="mt-2 text-sm text-slate-700">
-                Merci ! Pour confirmer la réservation, merci d’effectuer le virement de l’acompte.
-              </div>
-
-              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-900 space-y-2">
-                <div>
-                  <b>Montant acompte</b> :{" "}
-                  {acompte != null ? money(acompte) : "Montant à confirmer (prix non disponible)"}
-                </div>
-                <div className="text-slate-700 text-xs">
-                  (Le montant exact sera aussi rappelé dans l’email.)
-                </div>
-
-                <div className="pt-2">
-                  <b>RIB / IBAN</b> : <span className="text-slate-600">à renseigner ici (on le branchera ensuite depuis tes variables/env ou Supabase)</span>
-                </div>
-              </div>
-
-              <div className="mt-5 flex gap-2 justify-end">
-                <button
-                  type="button"
-                  className="rounded-xl border border-slate-300 px-4 py-2 text-slate-900"
-                  onClick={() => setShowRib(false)}
-                >
-                  Fermer
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

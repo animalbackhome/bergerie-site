@@ -17,7 +17,8 @@ function jsonError(message: string, status = 400) {
 }
 
 function mustStr(v: unknown) {
-  return String(v ?? "").trim();
+  const s = String(v ?? "").trim();
+  return s;
 }
 
 // --- RID helpers (UUID or positive integer) ---
@@ -61,68 +62,33 @@ function nightsBetween(arrival: string, departure: string) {
   return diff > 0 ? diff : 0;
 }
 
-function expectedOccupantsCount(booking: any): number | null {
-  // Priorité : champs explicites si présents
-  const adults = Number(booking?.adults_count ?? booking?.adults ?? NaN);
-  const children = Number(booking?.children_count ?? booking?.children ?? NaN);
-  if (Number.isFinite(adults) || Number.isFinite(children)) {
-    const a = Number.isFinite(adults) ? adults : 0;
-    const c = Number.isFinite(children) ? children : 0;
-    const total = a + c;
-    return total > 0 ? total : null;
-  }
-
-  // Fallbacks fréquents dans pricing
-  const p = booking?.pricing || {};
-  const candidates = [
-    p?.people,
-    p?.guests,
-    p?.guest_count,
-    p?.persons,
-    p?.occupants_count,
-    p?.people_count,
-    p?.nb_personnes,
-    p?.nombre_personnes,
-  ];
-  for (const v of candidates) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return null;
+function safeNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const rid = normalizeRid(searchParams.get("rid"));
-  const t = mustStr(searchParams.get("t"));
+  const t = searchParams.get("t");
   if (!rid) return jsonError("Missing rid", 400);
 
   const supabase = requireSupabaseAdmin();
 
-  // IMPORTANT:
-  // - Ton schéma peut varier (full_name vs name, arrival_date vs start_date, etc.)
-  // => on prend * pour éviter les erreurs PostgREST quand une colonne n'existe pas.
-  const { data: bookingRaw, error } = await supabase
+  const { data: booking, error } = await supabase
     .from("booking_requests")
-    .select("*")
+    .select(
+      "id, created_at, full_name, email, phone, arrival_date, departure_date, adults_count, children_count, animals_count, message, pricing"
+    )
     .eq("id", rid)
     .maybeSingle();
 
   if (error) return jsonError(error.message, 500);
-  if (!bookingRaw) return jsonError("Booking request not found", 404);
+  if (!booking) return jsonError("Booking request not found", 404);
 
-  const booking = {
-    ...bookingRaw,
-    full_name: (bookingRaw as any).full_name ?? (bookingRaw as any).name ?? "",
-    email: (bookingRaw as any).email ?? "",
-    phone: (bookingRaw as any).phone ?? "",
-    arrival_date: (bookingRaw as any).arrival_date ?? (bookingRaw as any).start_date ?? null,
-    departure_date: (bookingRaw as any).departure_date ?? (bookingRaw as any).end_date ?? null,
-  };
-
-  // Token:
-  // - si t absent => on autorise (fallback) pour ne pas casser le flux
-  // - si t présent => on vérifie
+  // IMPORTANT:
+  // - Si "t" absent => on autorise (fallback) pour ne pas bloquer le flux.
+  // - Si "t" présent => on vérifie.
   let okToken = true;
   if (t) {
     okToken = verifyContractToken({
@@ -137,7 +103,7 @@ export async function GET(req: Request) {
   const { data: contract } = await supabase
     .from("booking_contracts")
     .select(
-      "id, booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, accepted_terms, signed_at"
+      "id, booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, signed_at"
     )
     .eq("booking_request_id", rid)
     .maybeSingle();
@@ -153,7 +119,6 @@ export async function POST(req: Request) {
     return jsonError("Invalid JSON", 400);
   }
 
-  // IMPORTANT: le client envoie maintenant rid comme STRING (uuid)
   const rid = normalizeRid(mustStr(body?.rid));
   const t = mustStr(body?.t);
   if (!rid) return jsonError("Missing rid", 400);
@@ -188,32 +153,20 @@ export async function POST(req: Request) {
 
   const supabase = requireSupabaseAdmin();
 
-  // IMPORTANT:
-  // - Ton schéma peut varier => select(*) puis normalisation
-  const { data: bookingRaw, error: bookingErr } = await supabase
+  const { data: booking, error: bookingErr } = await supabase
     .from("booking_requests")
-    .select("*")
+    .select(
+      "id, full_name, email, phone, arrival_date, departure_date, adults_count, children_count, pricing, created_at"
+    )
     .eq("id", rid)
     .maybeSingle();
 
   if (bookingErr) return jsonError(bookingErr.message, 500);
-  if (!bookingRaw) return jsonError("Booking request not found", 404);
-
-  const booking = {
-    ...bookingRaw,
-    id: (bookingRaw as any).id,
-    full_name: (bookingRaw as any).full_name ?? (bookingRaw as any).name ?? "",
-    email: (bookingRaw as any).email ?? "",
-    phone: (bookingRaw as any).phone ?? "",
-    arrival_date: (bookingRaw as any).arrival_date ?? (bookingRaw as any).start_date ?? "",
-    departure_date: (bookingRaw as any).departure_date ?? (bookingRaw as any).end_date ?? "",
-    pricing: (bookingRaw as any).pricing ?? null,
-    created_at: (bookingRaw as any).created_at ?? null,
-  };
+  if (!booking) return jsonError("Booking request not found", 404);
 
   // Token:
-  // - si t absent => on autorise (fallback) pour ne pas casser le flux (comme /contract)
-  // - si t présent => on vérifie
+  // - Si "t" absent => on autorise (fallback) pour ne pas bloquer le flux.
+  // - Si "t" présent => on vérifie.
   let okToken = true;
   if (t) {
     okToken = verifyContractToken({
@@ -225,16 +178,14 @@ export async function POST(req: Request) {
   }
   if (!okToken) return jsonError("Invalid token", 403);
 
-  // Nombre de personnes OBLIGATOIREMENT égal à la demande si on peut le déterminer
-  const expected = expectedOccupantsCount(booking);
-  if (expected && normOccupants.length !== expected) {
-    return jsonError(
-      `Vous devez renseigner exactement ${expected} personne(s), comme dans votre demande.`,
-      400
-    );
+  // Enforce occupants count when available on booking request
+  const expected =
+    (safeNumber((booking as any).adults_count) ?? 0) + (safeNumber((booking as any).children_count) ?? 0);
+  if (expected > 0 && normOccupants.length !== expected) {
+    return jsonError(`Vous devez renseigner exactement ${expected} personne(s), comme dans votre demande.`, 400);
   }
 
-  // Upsert
+  // Upsert (NOTE: no accepted_terms column in booking_contracts)
   const { data: saved, error: upErr } = await supabase
     .from("booking_contracts")
     .upsert(
@@ -246,7 +197,6 @@ export async function POST(req: Request) {
         signer_city: city,
         signer_country: country,
         occupants: normOccupants,
-        accepted_terms: true,
         ip: req.headers.get("x-forwarded-for") || null,
         user_agent: req.headers.get("user-agent") || null,
       },
@@ -262,10 +212,7 @@ export async function POST(req: Request) {
   // Email
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  // si token absent, on envoie quand même le lien rid (fallback)
-  const contractUrl = baseUrl
-    ? `${baseUrl}/contract?rid=${encodeURIComponent(rid)}${t ? `&t=${encodeURIComponent(t)}` : ""}`
-    : "";
+  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}${t ? `&t=${encodeURIComponent(t)}` : ""}` : "";
 
   const nights = nightsBetween(booking.arrival_date, booking.departure_date);
   const totalPrice =
@@ -292,7 +239,7 @@ export async function POST(req: Request) {
 
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
-      <h2>${escapeHtml(subject)}</h2>
+      <h2>${subject}</h2>
       <p><b>Réservant</b> : ${escapeHtml(booking.full_name)} — ${escapeHtml(booking.email)} — ${escapeHtml(booking.phone || "")}</p>
       <p><b>Dates</b> : ${escapeHtml(formatDateFR(booking.arrival_date))} → ${escapeHtml(formatDateFR(booking.departure_date))} (${nights} nuit(s))</p>
       ${totalPrice ? `<p><b>Total</b> : ${escapeHtml(totalPrice)}</p>` : ""}
@@ -342,6 +289,6 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
