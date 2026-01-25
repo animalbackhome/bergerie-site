@@ -75,6 +75,10 @@ function pickNumber(obj: any, keys: string[]): number | null {
   return null;
 }
 
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 function expectedPeopleCount(booking: Booking): number | null {
   const a = Number(booking?.adults_count ?? 0);
   const c = Number(booking?.children_count ?? 0);
@@ -98,6 +102,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const PROPERTY_ADDRESS = useMemo(() => "2542 chemin des près neufs 83570 Carcès", []);
 
   const expectedCount = useMemo(() => expectedPeopleCount(booking), [booking]);
+
   // ✅ on autorise jusqu’à 8, MAIS si la demande (adultes+enfants) est connue, on limite à ce nombre
   const maxOccupants = useMemo(() => {
     const e = expectedCount;
@@ -147,60 +152,75 @@ export default function ContractClient({ booking, token, existing }: Props) {
     [booking.arrival_date, booking.departure_date]
   );
 
-  // ✅ Pricing : auto-compléter (total / hébergement / options / taxe) + solde
+  /**
+   * ✅ PRICING : aligné sur ce que ton API stocke :
+   * pricing = {
+   *  base_accommodation, cleaning, animals, wood, visitors,
+   *  extra_people, early_arrival, late_departure, tourist_tax, total
+   * }
+   *
+   * - Hébergement = base_accommodation
+   * - Ménage = cleaning (fallback 100)
+   * - Options = somme des extras (animals+wood+visitors+extra_people+early_arrival+late_departure)
+   * - Taxe = tourist_tax
+   * - Total = total
+   * - Acompte = 30% total / Solde = 70%
+   */
   const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
 
     const total =
       pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
 
-    const cleaning = 100; // Forfait ménage fixe
+    const cleaning =
+      pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
 
-    const options =
+    const accommodation =
       pickNumber(p, [
-        "options_total",
-        "extras_total",
-        "extras",
-        "options",
-        "addon_total",
-        "add_ons_total",
-      ]) ?? 0;
-
-    const touristTax =
-      pickNumber(p, [
-        "tourist_tax",
-        "taxe_sejour",
-        "taxe_de_sejour",
-        "city_tax",
-        "local_tax",
-      ]) ?? 0;
-
-    // Hébergement : soit fourni par pricing, sinon calculé depuis total
-    let accommodation =
-      pickNumber(p, [
-        "accommodation",
-        "accommodation_total",
-        "lodging",
-        "lodging_total",
-        "housing",
-        "stay",
-        "stay_total",
+        "base_accommodation",
         "base",
         "base_total",
+        "accommodation",
+        "accommodation_total",
+        "stay",
+        "stay_total",
+        "lodging",
+        "lodging_total",
       ]) ?? null;
 
-    if (accommodation == null && total != null) {
-      accommodation = total - cleaning - options - touristTax;
-      if (!Number.isFinite(accommodation) || accommodation < 0) accommodation = null;
+    const touristTax =
+      pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
+
+    // Extras (options) : soit une clé existe, soit on additionne les champs connus
+    const optionsDirect =
+      pickNumber(p, ["options_total", "extras_total", "extras", "options", "addon_total", "add_ons_total"]) ?? null;
+
+    const animals = pickNumber(p, ["animals", "pet_fee", "pets_fee"]) ?? 0;
+    const wood = pickNumber(p, ["wood"]) ?? 0;
+    const visitors = pickNumber(p, ["visitors"]) ?? 0;
+    const extra_people = pickNumber(p, ["extra_people", "extra_people_total"]) ?? 0;
+    const early_arrival = pickNumber(p, ["early_arrival", "earlyArrival"]) ?? 0;
+    const late_departure = pickNumber(p, ["late_departure", "lateDeparture"]) ?? 0;
+
+    const options =
+      optionsDirect != null
+        ? optionsDirect
+        : round2(animals + wood + visitors + extra_people + early_arrival + late_departure);
+
+    // Si accommodation manquante MAIS total présent : calcul propre
+    let accommodationFixed = accommodation;
+    if (accommodationFixed == null && total != null) {
+      const computed = total - cleaning - options - touristTax;
+      accommodationFixed = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
     }
 
     // acompte 30% / solde 70%
-    const deposit30 = total != null ? total * 0.3 : null;
-    const solde = total != null && deposit30 != null ? total - deposit30 : null;
+    const deposit30 = total != null ? round2(total * 0.3) : null;
+    const solde = total != null && deposit30 != null ? round2(total - deposit30) : null;
 
     return {
       total,
-      accommodation,
+      accommodation: accommodationFixed,
       cleaning,
       options,
       touristTax,
@@ -253,6 +273,9 @@ export default function ContractClient({ booking, token, existing }: Props) {
     const accommodationText =
       pricingNumbers.accommodation != null ? toMoneyEUR(pricingNumbers.accommodation) : "[____ €]";
 
+    const cleaningText =
+      pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
+
     const optionsText =
       pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
 
@@ -302,7 +325,7 @@ Départ fin de journée : +70€
 4) Prix — Taxes — Prestations
 Prix total du séjour : ${priceTotal || "[____ €]"} comprenant :
 Hébergement : ${accommodationText}
-Forfait ménage : 100€
+Forfait ménage : ${cleaningText}
 Options éventuelles : ${optionsText}
 Taxe de séjour : ${touristTaxText} (si applicable / selon règles locales)
 
@@ -426,7 +449,7 @@ départ 10h max
 options possibles : arrivée début de journée (+70€) / départ fin de journée (+70€) selon disponibilité
 D) Prix — Taxes — Prestations
 Détail du prix total
-Forfait ménage fixe : 100€
+Forfait ménage fixe : ${cleaningText}
 Taxe de séjour (si applicable) + options éventuelles
 E) Paiement (virement uniquement)
 Paiement par RIB uniquement (pas de chèque)
@@ -507,6 +530,7 @@ ${occupantsText}
     OWNER,
     PROPERTY_ADDRESS,
     pricingNumbers.accommodation,
+    pricingNumbers.cleaning,
     pricingNumbers.options,
     pricingNumbers.touristTax,
     contractTodayFR,
@@ -602,7 +626,6 @@ ${occupantsText}
 
   return (
     <div className="min-h-screen bg-slate-950">
-      {/* Bandeau haut (plus sombre) */}
       <div className="bg-gradient-to-r from-[#06243D] via-[#053A63] to-[#0B2A7A]">
         <div className="mx-auto max-w-6xl px-6 py-10">
           <div className="text-white/80 text-sm">Superbe bergerie • Contrat de location</div>
@@ -616,7 +639,6 @@ ${occupantsText}
             Les informations importantes (dates, prix, réservation) sont verrouillées.
           </div>
 
-          {/* Top cards */}
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="text-xs font-semibold tracking-wide text-slate-500">RÉSERVATION</div>
@@ -696,7 +718,6 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Contract full text */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">CONTRAT (À LIRE)</div>
 
@@ -705,7 +726,6 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Occupants */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">
               PERSONNES PRÉSENTES PENDANT LA LOCATION (NOM, PRÉNOM, ÂGE) — MAX {maxOccupants}
@@ -721,7 +741,9 @@ ${occupantsText}
                       value={o.first_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                     />
@@ -731,7 +753,9 @@ ${occupantsText}
                       value={o.last_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                     />
@@ -741,7 +765,9 @@ ${occupantsText}
                       value={o.age}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, age: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                       inputMode="numeric"
@@ -778,7 +804,6 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Signature */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">SIGNATURE</div>
 

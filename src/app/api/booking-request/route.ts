@@ -368,6 +368,15 @@ function pricingLinesHtml(pricing: any) {
   return rows ? `<ul style="margin:8px 0 0 18px;padding:0">${rows}</ul>` : "";
 }
 
+function buildStamp() {
+  // ✅ permet de prouver quel build génère l’email
+  const sha =
+    (process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "").trim() || "local";
+  const env =
+    (process.env.VERCEL_ENV || process.env.NODE_ENV || "").trim() || "unknown";
+  return { sha, env };
+}
+
 function emailAdminHtml(payload: any) {
   const {
     guestName,
@@ -383,7 +392,21 @@ function emailAdminHtml(payload: any) {
     pricing,
     links,
     contractLink,
+    debugReceived, // ✅ ajouté
   } = payload;
+
+  const stamp = buildStamp();
+
+  const debugBlock = debugReceived
+    ? `
+    <div style="margin-top:14px;padding:10px 12px;border:1px dashed #94a3b8;border-radius:10px;background:#f8fafc">
+      <div style="font-weight:700;margin-bottom:6px">DEBUG (valeurs reçues par l’API)</div>
+      <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;white-space:pre-wrap">
+${escapeHtml(JSON.stringify(debugReceived, null, 2))}
+      </div>
+    </div>
+    `
+    : "";
 
   return `
   <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.45">
@@ -394,10 +417,12 @@ function emailAdminHtml(payload: any) {
     <p><b>Voyageurs :</b> ${escapeHtml(String(adults))} adulte(s) / ${escapeHtml(String(children))} enfant(s)</p>
     <p><b>Animaux :</b> ${escapeHtml(animalsSummary)}</p>
 
-    <p><b>Total estimé :</b> ${escapeHtml(formatEUR(Number(pricing.total || 0)))}</p>
+    <p><b>Total estimé (serveur) :</b> ${escapeHtml(formatEUR(Number(pricing.total || 0)))}</p>
     ${pricingLinesHtml(pricing)}
 
     ${message ? `<p><b>Message :</b><br/>${escapeHtml(message).replaceAll("\n", "<br/>")}</p>` : ""}
+
+    ${debugBlock}
 
     <hr style="margin:16px 0"/>
 
@@ -414,6 +439,8 @@ function emailAdminHtml(payload: any) {
     </p>
 
     <p style="color:#64748b;font-size:12px;margin-top:16px">
+      Build: <b>${escapeHtml(stamp.env)}</b> — <b>${escapeHtml(stamp.sha)}</b>
+      <br/>
       Les liens expirent automatiquement. Ne transférez pas cet email.
     </p>
   </div>
@@ -468,10 +495,10 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as BookingRequestBody;
 
-    const guestName = safeStr(body.name);
-    const guestEmail = safeStr(body.email);
-    const guestPhone = safeStr(body.phone);
-    const message = safeStr(body.message);
+    const guestName = safeStr((body as any).name);
+    const guestEmail = safeStr((body as any).email);
+    const guestPhone = safeStr((body as any).phone);
+    const message = safeStr((body as any).message);
 
     const start_date = pickDateField(body as any, "start");
     const end_date = pickDateField(body as any, "end");
@@ -623,6 +650,27 @@ export async function POST(req: Request) {
       );
     }
 
+    // ✅ DEBUG : ce bloc te dira exactement ce que l’API reçoit et calcule
+    const debugReceived = {
+      received: {
+        start_date,
+        end_date,
+        nights: nightsComputed,
+        adults,
+        children,
+        animals_count,
+        animal_type: animal_type || null,
+        other_animal_label: other_animal_label || null,
+        wood_quarters,
+        visitors_count,
+        extra_people_count,
+        extra_people_nights,
+        early_arrival,
+        late_departure,
+      },
+      pricingComputed: pricing,
+    };
+
     await r.emails.send({
       from: RESEND_FROM,
       to: notifyEmail,
@@ -641,6 +689,7 @@ export async function POST(req: Request) {
         pricing,
         links,
         contractLink,
+        debugReceived,
       }),
       replyTo: (BOOKING_REPLY_TO || "").trim() || guestEmail,
     });
