@@ -57,13 +57,39 @@ function safeInt(v: unknown, fallback = 0) {
 }
 
 function safeBool(v: unknown) {
-  return v === true || v === "true" || v === 1 || v === "1";
+  // ✅ important : beaucoup de formulaires envoient "on" pour les checkboxes
+  return (
+    v === true ||
+    v === "true" ||
+    v === 1 ||
+    v === "1" ||
+    v === "on" ||
+    v === "yes" ||
+    v === "y"
+  );
+}
+
+function pickFirst(body: any, keys: string[]) {
+  for (const k of keys) {
+    const v = body?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return undefined;
+}
+
+function pickInt(body: any, keys: string[], fallback = 0) {
+  return safeInt(pickFirst(body, keys), fallback);
+}
+
+function pickBool(body: any, keys: string[]) {
+  return safeBool(pickFirst(body, keys));
 }
 
 function isValidEmail(email: string) {
   // validation simple (suffisante ici)
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
+
 function normalizeYmd(input: unknown) {
   if (input == null) return "";
 
@@ -188,11 +214,6 @@ type BookingRequestBody = {
 
   // Calendrier Airbnb (optionnel)
   airbnb_calendar_url?: string;
-
-  // ⚠️ IGNORÉ côté serveur (anti-triche) — on ne fait pas confiance au client :
-  // base_accommodation?: number;
-  // pricing?: any;
-  // total?: number;
 };
 
 /* ------------------ Pricing (verrouillé) ------------------ */
@@ -455,8 +476,9 @@ export async function POST(req: Request) {
     const start_date = pickDateField(body as any, "start");
     const end_date = pickDateField(body as any, "end");
 
-    const adults = Math.max(0, safeInt(body.adults, 0));
-    const children = Math.max(0, safeInt(body.children, 0));
+    // ✅ voyageurs : supporte plusieurs noms si ton form a évolué
+    const adults = Math.max(0, pickInt(body as any, ["adults", "adults_count", "adultsCount"], 0));
+    const children = Math.max(0, pickInt(body as any, ["children", "children_count", "childrenCount"], 0));
 
     // Validations minimales
     if (!guestName) return jsonError("Nom obligatoire.", 400);
@@ -465,11 +487,16 @@ export async function POST(req: Request) {
 
     const nightsComputed = diffNights(start_date, end_date);
     if (nightsComputed === null) return jsonError("Dates invalides (format attendu : YYYY-MM-DD).", 400);
-    if (nightsComputed <= 0) return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
+    if (nightsComputed <= 0)
+      return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
 
-    const animals_count = Math.max(0, safeInt(body.animals_count, 0));
-    const animal_type = safeStr(body.animal_type);
-    const other_animal_label = safeStr(body.other_animal_label);
+    // ✅ options/animaux : supporte snake_case + camelCase + variantes fréquentes
+    const animals_count = Math.max(
+      0,
+      pickInt(body as any, ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"], 0)
+    );
+    const animal_type = safeStr((body as any).animal_type ?? (body as any).animalType ?? "");
+    const other_animal_label = safeStr((body as any).other_animal_label ?? (body as any).otherAnimalLabel ?? "");
 
     const animalsSummary =
       animals_count <= 0
@@ -478,12 +505,19 @@ export async function POST(req: Request) {
           ? `${animals_count} (autre - ${other_animal_label})`
           : `${animals_count} (${animal_type || "—"})`;
 
-    const wood_quarters = Math.max(0, safeInt(body.wood_quarters, 0));
-    const visitors_count = Math.max(0, safeInt(body.visitors_count, 0));
-    const extra_people_count = Math.max(0, safeInt(body.extra_people_count, 0));
-    const extra_people_nights = Math.max(0, safeInt(body.extra_people_nights, 0));
-    const early_arrival = safeBool(body.early_arrival);
-    const late_departure = safeBool(body.late_departure);
+    const wood_quarters = Math.max(0, pickInt(body as any, ["wood_quarters", "woodQuarters", "wood"], 0));
+    const visitors_count = Math.max(0, pickInt(body as any, ["visitors_count", "visitorsCount", "visitors"], 0));
+    const extra_people_count = Math.max(
+      0,
+      pickInt(body as any, ["extra_people_count", "extraPeopleCount", "extra_people", "extraPeople"], 0)
+    );
+    const extra_people_nights = Math.max(
+      0,
+      pickInt(body as any, ["extra_people_nights", "extraPeopleNights", "extra_people_night", "extraPeopleNight"], 0)
+    );
+
+    const early_arrival = pickBool(body as any, ["early_arrival", "earlyArrival", "early_checkin", "earlyCheckin"]);
+    const late_departure = pickBool(body as any, ["late_departure", "lateDeparture", "late_checkout", "lateCheckout"]);
 
     const pricing = computePricing({
       nights: nightsComputed,
@@ -534,10 +568,10 @@ export async function POST(req: Request) {
       visitors_count: visitors_count || 0,
       extra_people_count: extra_people_count || 0,
       extra_people_nights: extra_people_nights || 0,
-      early_arrival: early_arrival || false,
-      late_departure: late_departure || false,
+      early_arrival: !!early_arrival,
+      late_departure: !!late_departure,
 
-      airbnb_calendar_url: safeStr(body.airbnb_calendar_url) || null,
+      airbnb_calendar_url: safeStr((body as any).airbnb_calendar_url ?? (body as any).airbnbCalendarUrl) || null,
 
       // ✅ source of truth serveur
       pricing,
