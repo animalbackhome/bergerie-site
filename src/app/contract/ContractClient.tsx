@@ -1,9 +1,16 @@
+// src/app/contract/ContractClient.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 
 type Booking = {
-  id: number;
+  // ⚠️ En prod ton id est un UUID (string) -> on accepte string | number
+  id: string | number;
+
+  // ✅ Ajoutés côté serveur (page.tsx) pour ne jamais “perdre” le rid
+  booking_request_id?: string | number;
+  rid?: string | number;
+
   full_name: string;
   email: string;
   phone?: string;
@@ -13,7 +20,7 @@ type Booking = {
 };
 
 type ExistingContract = {
-  booking_request_id: number;
+  booking_request_id: string | number;
   signer_address_line1: string;
   signer_address_line2?: string | null;
   signer_postal_code: string;
@@ -39,6 +46,12 @@ function money(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "";
   return `${n.toFixed(2)} €`;
+}
+
+// ✅ toujours renvoyer un rid fiable
+function getRid(booking: Booking): string {
+  const v = booking.booking_request_id ?? booking.rid ?? booking.id;
+  return String(v ?? "").trim();
 }
 
 export default function ContractClient({ booking, token, existing }: Props) {
@@ -71,10 +84,11 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  // ✅ dépendance sur un id stable (rid)
   useEffect(() => {
     setOccupants(initialOccupants);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booking.id]);
+  }, [String(getRid(booking))]);
 
   function updateOcc(i: number, key: "first_name" | "last_name" | "age", value: string) {
     setOccupants((prev) => prev.map((o, idx) => (idx === i ? { ...o, [key]: value } : o)));
@@ -90,14 +104,29 @@ export default function ContractClient({ booking, token, existing }: Props) {
 
   async function submit() {
     setError(null);
+    setSuccess(false);
+
+    const rid = getRid(booking);
+    if (!rid) {
+      setError("Missing rid");
+      return;
+    }
+
+    if (!accepted) {
+      setError("Veuillez cocher la case d’acceptation avant de signer.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch("/api/contract", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          rid: booking.id,
+          // ✅ IMPORTANT: on envoie le vrai rid (UUID)
+          rid,
           t: token,
+
           signer_address_line1: address1,
           signer_address_line2: address2,
           signer_postal_code: zip,
@@ -107,10 +136,12 @@ export default function ContractClient({ booking, token, existing }: Props) {
           accepted_terms: accepted,
         }),
       });
+
       const data = await res.json();
       if (!res.ok || !data?.ok) {
         throw new Error(data?.error || "Erreur inconnue");
       }
+
       setSuccess(true);
     } catch (e: any) {
       setError(e?.message || "Erreur");
@@ -143,7 +174,8 @@ export default function ContractClient({ booking, token, existing }: Props) {
                 </div>
               ) : null}
               <div className="mt-2">
-                <b>Dates</b> : {formatDateFR(booking.arrival_date)} → {formatDateFR(booking.departure_date)}
+                <b>Dates</b> : {formatDateFR(booking.arrival_date)} →{" "}
+                {formatDateFR(booking.departure_date)}
               </div>
               {booking?.pricing?.total != null ? (
                 <div>
@@ -240,11 +272,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
             ))}
 
             {!isSigned ? (
-              <button
-                type="button"
-                className="text-sm text-blue-700 hover:underline"
-                onClick={addOcc}
-              >
+              <button type="button" className="text-sm text-blue-700 hover:underline" onClick={addOcc}>
                 + Ajouter une personne
               </button>
             ) : null}
@@ -264,9 +292,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
                 checked={accepted}
                 onChange={(e) => setAccepted(e.target.checked)}
               />
-              <span>
-                J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.
-              </span>
+              <span>J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.</span>
             </label>
           )}
 

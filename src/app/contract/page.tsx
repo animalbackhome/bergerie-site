@@ -78,10 +78,6 @@ export default async function ContractPage(props: PageProps) {
 
   const supabase = requireSupabaseAdmin();
 
-  // IMPORTANT:
-  // - Ton schéma a déjà changé (ex: name/start_date/end_date) vs (full_name/arrival_date/departure_date)
-  // - Si on "select" une colonne qui n'existe pas, PostgREST/Supabase renvoie une erreur et data=null
-  // => donc on lit les colonnes actuelles (et on garde des fallbacks) pour éviter "Demande introuvable".
   const { data: bookingRaw, error: bookingErr } = await supabase
     .from("booking_requests")
     .select("*")
@@ -103,14 +99,27 @@ export default async function ContractPage(props: PageProps) {
     );
   }
 
+  // ✅ IMPORTANT: on expose rid sous plusieurs clés
+  // pour que le client/API ne “perde” jamais l’id au submit.
   const booking = {
+    // identifiants
     id: (bookingRaw as any).id,
+    booking_request_id: (bookingRaw as any).id, // ✅ souvent attendu côté contrat
+    rid: (bookingRaw as any).id, // ✅ fallback ultra robuste
+
+    // identité
     full_name: (bookingRaw as any).full_name ?? (bookingRaw as any).name ?? "",
     email: (bookingRaw as any).email ?? "",
     phone: (bookingRaw as any).phone ?? "",
-    arrival_date: (bookingRaw as any).arrival_date ?? (bookingRaw as any).start_date ?? null,
-    departure_date: (bookingRaw as any).departure_date ?? (bookingRaw as any).end_date ?? null,
+
+    // dates
+    arrival_date:
+      (bookingRaw as any).arrival_date ?? (bookingRaw as any).start_date ?? null,
+    departure_date:
+      (bookingRaw as any).departure_date ?? (bookingRaw as any).end_date ?? null,
     nights: (bookingRaw as any).nights ?? null,
+
+    // pricing & metadata
     pricing: (bookingRaw as any).pricing ?? null,
     created_at: (bookingRaw as any).created_at ?? null,
   };
