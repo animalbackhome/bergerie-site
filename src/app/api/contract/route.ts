@@ -21,7 +21,9 @@ function mustStr(v: unknown) {
 }
 
 function __isUuid(s: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    s
+  );
 }
 
 function __isPositiveIntString(s: string) {
@@ -60,6 +62,24 @@ function toMoneyEUR(v: any) {
   return `${n.toFixed(2)} €`;
 }
 
+function pickNumber(obj: any, keys: string[]): number | null {
+  const o = obj || {};
+  for (const k of keys) {
+    const v = o?.[k];
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function todayFR(): string {
+  try {
+    return new Date().toLocaleDateString("fr-FR");
+  } catch {
+    return "";
+  }
+}
+
 function buildFullContractText(args: {
   ownerName: string;
   ownerAddress: string;
@@ -76,9 +96,17 @@ function buildFullContractText(args: {
   nights: number;
 
   totalPrice: string; // "xxx €" or ""
+  accommodation: string; // "xxx €" or ""
+  options: string; // "xxx €" or ""
+  touristTax: string; // "xxx €" or ""
   deposit30: string; // "xxx €" or ""
+  solde: string; // "xxx €" or ""
+
   address: string;
   occupantsText: string;
+
+  signatureCity: string;
+  signatureDate: string; // FR
 }) {
   const {
     ownerName,
@@ -93,12 +121,27 @@ function buildFullContractText(args: {
     departureDate,
     nights,
     totalPrice,
+    accommodation,
+    options,
+    touristTax,
     deposit30,
+    solde,
     address,
     occupantsText,
+    signatureCity,
+    signatureDate,
   } = args;
 
   // IMPORTANT: texte complet (contrat + annexes) sans suppression.
+  // Modifs demandées :
+  // - Propriétaire fixé
+  // - Adresse du logement fixée
+  // - "Horaires standard" (suppression "(selon ton site)")
+  // - Bloc prix auto-renseigné si possible
+  // - Solde auto-calculé
+  // - Signatures : "Fait à Carcès, le [date du jour]"
+  // - "✅ Structure du contrat" : suppression "(version actuelle — “ma base”)"
+  // - Annexes 1/2/4 visibles aussi (comme dans ContractClient)
   return `CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —
 
 1) Parties
@@ -130,7 +173,7 @@ Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
 Période : du ${arrivalDate} au ${departureDate} pour ${nights} nuits.
-Horaires standard (selon ton site)
+Horaires standard
 Arrivée (check-in) : entre 16h et 18h
 Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
 Options (si accord préalable et selon disponibilités) :
@@ -139,10 +182,10 @@ Départ fin de journée : +70€
 
 4) Prix — Taxes — Prestations
 Prix total du séjour : ${totalPrice || "[____ €]"} comprenant :
-Hébergement : [____ €]
+Hébergement : ${accommodation || "[____ €]"}
 Forfait ménage : 100€
-Options éventuelles : [____ €]
-Taxe de séjour : [____ €] (si applicable / selon règles locales)
+Options éventuelles : ${options || "[____ €]"}
+Taxe de séjour : ${touristTax || "[____ €]"} (si applicable / selon règles locales)
 
 5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
 Mode de paiement : virement bancaire uniquement.
@@ -153,7 +196,7 @@ Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
-Le solde, soit [____ €], doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
+Le solde, soit ${solde || "[____ €]"}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
 À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de relance, le propriétaire pourra considérer la réservation comme annulée par le locataire, l’acompte restant acquis au propriétaire.
 
 6) Formation du contrat — Réservation
@@ -228,17 +271,26 @@ Contrat entre particuliers. En cas de difficulté, les parties recherchent une s
 À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
 
 Signatures
-Fait à [ville], le [date].
+Fait à ${signatureCity || "Carcès"}, le ${signatureDate || "[date]"}.
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
+ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
+(Repris du site.)
+
+ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
+(Repris du site.)
+
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
 (On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
 
-✅ Structure du contrat (version actuelle — “ma base”)
+ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
+(À signer sur place.)
+
+✅ Structure du contrat
 Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide :
 A) Identification des parties
 Propriétaire (bailleur) : identité + coordonnées
@@ -386,7 +438,7 @@ export async function POST(req: Request) {
     return jsonError("Vous devez accepter le contrat.", 400);
   }
 
-  // Validation occupants : {first_name,last_name,age}
+  // Validation occupants : {first_name,last_name,age}  (MAX 8)
   const normOccupants = occupants
     .map((o: any) => ({
       first_name: mustStr(o?.first_name),
@@ -398,14 +450,15 @@ export async function POST(req: Request) {
   if (normOccupants.length === 0) {
     return jsonError("Ajoutez au moins une personne (nom, prénom, âge).", 400);
   }
+  if (normOccupants.length > 8) {
+    return jsonError("Maximum 8 personnes.", 400);
+  }
 
   const supabase = requireSupabaseAdmin();
 
   const { data: booking, error: bookingErr } = await supabase
     .from("booking_requests")
-    .select(
-      "id, full_name, email, phone, arrival_date, departure_date, adults_count, children_count, pricing, created_at"
-    )
+    .select("id, full_name, email, phone, arrival_date, departure_date, pricing, created_at")
     .eq("id", rid)
     .maybeSingle();
 
@@ -419,15 +472,6 @@ export async function POST(req: Request) {
     token: t,
   });
   if (!okToken) return jsonError("Invalid token", 403);
-
-  // Enforce EXACT people count (adults + children) if present
-  const adults = Number(booking.adults_count ?? 0);
-  const children = Number(booking.children_count ?? 0);
-  const expected = (Number.isFinite(adults) ? adults : 0) + (Number.isFinite(children) ? children : 0);
-
-  if (expected > 0 && normOccupants.length !== expected) {
-    return jsonError(`Vous devez renseigner exactement ${expected} personne(s), comme dans votre demande.`, 400);
-  }
 
   // Upsert (IMPORTANT: no accepted_terms column in DB -> remove it)
   const { data: saved, error: upErr } = await supabase
@@ -456,24 +500,78 @@ export async function POST(req: Request) {
   // Email
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
+  const contractUrl = baseUrl
+    ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}`
+    : "";
 
   const nights = nightsBetween(booking.arrival_date, booking.departure_date);
 
-  const totalPrice = booking?.pricing ? toMoneyEUR(booking.pricing.total ?? booking.pricing.total_price ?? booking.pricing.grand_total ?? booking.pricing.amount_total) : "";
-  const deposit30 = totalPrice ? toMoneyEUR((Number((booking.pricing.total ?? booking.pricing.total_price ?? booking.pricing.grand_total ?? booking.pricing.amount_total) || 0) || 0) * 0.3) : "";
+  // --- Pricing auto (mêmes règles que côté page) ---
+  const p = booking?.pricing || {};
+  const totalN =
+    pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+
+  const cleaningN = 100;
+
+  const optionsN =
+    pickNumber(p, [
+      "options_total",
+      "extras_total",
+      "extras",
+      "options",
+      "addon_total",
+      "add_ons_total",
+    ]) ?? 0;
+
+  const touristTaxN =
+    pickNumber(p, [
+      "tourist_tax",
+      "taxe_sejour",
+      "taxe_de_sejour",
+      "city_tax",
+      "local_tax",
+    ]) ?? 0;
+
+  let accommodationN =
+    pickNumber(p, [
+      "accommodation",
+      "accommodation_total",
+      "lodging",
+      "lodging_total",
+      "housing",
+      "stay",
+      "stay_total",
+      "base",
+      "base_total",
+    ]) ?? null;
+
+  if (accommodationN == null && totalN != null) {
+    accommodationN = totalN - cleaningN - optionsN - touristTaxN;
+    if (!Number.isFinite(accommodationN) || accommodationN < 0) accommodationN = null;
+  }
+
+  const deposit30N = totalN != null ? totalN * 0.3 : null;
+  const soldeN = totalN != null && deposit30N != null ? totalN - deposit30N : null;
+
+  const totalPrice = totalN != null ? toMoneyEUR(totalN) : "";
+  const accommodation = accommodationN != null ? toMoneyEUR(accommodationN) : "";
+  const options = Number.isFinite(optionsN) ? toMoneyEUR(optionsN) : "";
+  const touristTax = Number.isFinite(touristTaxN) ? toMoneyEUR(touristTaxN) : "";
+  const deposit30 = deposit30N != null ? toMoneyEUR(deposit30N) : "";
+  const solde = soldeN != null ? toMoneyEUR(soldeN) : "";
 
   const addressText = `${addressLine1}${addressLine2 ? `, ${addressLine2}` : ""}, ${postalCode} ${city}, ${country}`;
+
   const occupantsText = normOccupants
     .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
     .join("\n");
 
-  // Optional env (owner/property) for email contract text
-  const ownerName = process.env.NEXT_PUBLIC_OWNER_NAME || "";
-  const ownerAddress = process.env.NEXT_PUBLIC_OWNER_ADDRESS || "";
-  const ownerEmail = process.env.NEXT_PUBLIC_OWNER_EMAIL || "";
-  const ownerPhone = process.env.NEXT_PUBLIC_OWNER_PHONE || "";
-  const propertyAddress = process.env.NEXT_PUBLIC_PROPERTY_ADDRESS || "";
+  // ✅ Propriétaire & adresse logement FIXES (comme demandé)
+  const ownerName = "Laurens Coralie";
+  const ownerAddress = "2542 chemin des près neufs 83570 Carcès";
+  const ownerEmail = "laurens-coralie@hotmail.com";
+  const ownerPhone = "0629465295";
+  const propertyAddress = "2542 chemin des près neufs 83570 Carcès";
 
   const contractText = buildFullContractText({
     ownerName,
@@ -488,9 +586,15 @@ export async function POST(req: Request) {
     departureDate: formatDateFR(booking.departure_date),
     nights,
     totalPrice,
+    accommodation,
+    options,
+    touristTax,
     deposit30,
+    solde,
     address: addressText,
     occupantsText,
+    signatureCity: "Carcès",
+    signatureDate: todayFR(),
   });
 
   const subjectOwner = `Contrat signé — Demande #${rid}`;
@@ -547,6 +651,6 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }

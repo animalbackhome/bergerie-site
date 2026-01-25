@@ -65,6 +65,16 @@ function toMoneyEUR(v: any): string {
   return `${n.toFixed(2)} €`;
 }
 
+function pickNumber(obj: any, keys: string[]): number | null {
+  const o = obj || {};
+  for (const k of keys) {
+    const v = o?.[k];
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
 function expectedPeopleCount(booking: Booking): number | null {
   const a = Number(booking?.adults_count ?? 0);
   const c = Number(booking?.children_count ?? 0);
@@ -72,28 +82,35 @@ function expectedPeopleCount(booking: Booking): number | null {
   return total > 0 ? total : null;
 }
 
-/**
- * Optionnel (mais recommandé) :
- * tu peux définir ces valeurs dans Vercel env (NEXT_PUBLIC_...) pour auto-remplir le contrat.
- */
-const OWNER = {
-  name: process.env.NEXT_PUBLIC_OWNER_NAME || "",
-  address: process.env.NEXT_PUBLIC_OWNER_ADDRESS || "",
-  email: process.env.NEXT_PUBLIC_OWNER_EMAIL || "",
-  phone: process.env.NEXT_PUBLIC_OWNER_PHONE || "",
-};
-
-const PROPERTY_ADDRESS = process.env.NEXT_PUBLIC_PROPERTY_ADDRESS || "";
-
 export default function ContractClient({ booking, token, existing }: Props) {
+  // ✅ Coordonnées propriétaire FIXES (comme demandé)
+  const OWNER = useMemo(
+    () => ({
+      name: "Laurens Coralie",
+      address: "2542 chemin des près neufs 83570 Carcès",
+      email: "laurens-coralie@hotmail.com",
+      phone: "0629465295",
+    }),
+    []
+  );
+
+  // ✅ Adresse du logement FIXE (comme demandé)
+  const PROPERTY_ADDRESS = useMemo(() => "2542 chemin des près neufs 83570 Carcès", []);
+
   const expectedCount = useMemo(() => expectedPeopleCount(booking), [booking]);
-  const hardCount = expectedCount ?? 1;
+  // ✅ on autorise jusqu’à 8, MAIS si la demande (adultes+enfants) est connue, on limite à ce nombre
+  const maxOccupants = useMemo(() => {
+    const e = expectedCount;
+    if (e != null && e > 0) return Math.min(8, e);
+    return 8;
+  }, [expectedCount]);
 
   const [addressLine1, setAddressLine1] = useState(existing?.signer_address_line1 || "");
   const [addressLine2, setAddressLine2] = useState(existing?.signer_address_line2 || "");
   const [postalCode, setPostalCode] = useState(existing?.signer_postal_code || "");
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
+
   const [occupants, setOccupants] = useState<Occupant[]>([]);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
@@ -105,25 +122,22 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const isSigned = Boolean(existing?.signed_at) || signedOk;
 
   useEffect(() => {
-    // Initialiser occupants : EXACTEMENT le nombre demandé (adultes + enfants)
-    const desired = hardCount;
-
-    // 1) si un contrat existe déjà et a exactement le bon nombre -> reprendre
-    if (existing?.occupants?.length === desired) {
+    // 1) si un contrat existe déjà -> reprendre
+    if (existing?.occupants?.length) {
       setOccupants(existing.occupants.map((o) => ({ ...o })));
       return;
     }
 
-    // 2) sinon -> générer une liste de "desired" lignes
+    // 2) sinon -> générer une liste selon la demande (adultes+enfants) si dispo, sinon 1 personne
+    const desired = maxOccupants > 0 ? maxOccupants : 1;
+
     const first = splitName(booking.full_name);
     const base: Occupant[] = Array.from({ length: desired }).map((_, i) => {
-      if (i === 0) {
-        return { first_name: first.first, last_name: first.last, age: "" };
-      }
+      if (i === 0) return { first_name: first.first, last_name: first.last, age: "" };
       return { first_name: "", last_name: "", age: "" };
     });
     setOccupants(base);
-  }, [existing, booking.full_name, hardCount]);
+  }, [existing, booking.full_name, maxOccupants]);
 
   const disabledInputClass =
     "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder:text-slate-400 shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-900 disabled:opacity-100";
@@ -133,33 +147,90 @@ export default function ContractClient({ booking, token, existing }: Props) {
     [booking.arrival_date, booking.departure_date]
   );
 
-  const priceTotal = useMemo(() => {
-    // On essaie plusieurs clés possibles selon ton objet pricing
+  // ✅ Pricing : auto-compléter (total / hébergement / options / taxe) + solde
+  const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
-    const v =
-      p?.total ??
-      p?.total_price ??
-      p?.grand_total ??
-      p?.amount_total ??
-      null;
 
-    return v != null ? toMoneyEUR(v) : "";
+    const total =
+      pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+
+    const cleaning = 100; // Forfait ménage fixe
+
+    const options =
+      pickNumber(p, [
+        "options_total",
+        "extras_total",
+        "extras",
+        "options",
+        "addon_total",
+        "add_ons_total",
+      ]) ?? 0;
+
+    const touristTax =
+      pickNumber(p, [
+        "tourist_tax",
+        "taxe_sejour",
+        "taxe_de_sejour",
+        "city_tax",
+        "local_tax",
+      ]) ?? 0;
+
+    // Hébergement : soit fourni par pricing, sinon calculé depuis total
+    let accommodation =
+      pickNumber(p, [
+        "accommodation",
+        "accommodation_total",
+        "lodging",
+        "lodging_total",
+        "housing",
+        "stay",
+        "stay_total",
+        "base",
+        "base_total",
+      ]) ?? null;
+
+    if (accommodation == null && total != null) {
+      accommodation = total - cleaning - options - touristTax;
+      if (!Number.isFinite(accommodation) || accommodation < 0) accommodation = null;
+    }
+
+    // acompte 30% / solde 70%
+    const deposit30 = total != null ? total * 0.3 : null;
+    const solde = total != null && deposit30 != null ? total - deposit30 : null;
+
+    return {
+      total,
+      accommodation,
+      cleaning,
+      options,
+      touristTax,
+      deposit30,
+      solde,
+    };
   }, [booking.pricing]);
 
-  const deposit30 = useMemo(() => {
-    // Montant estimé (30%) calculé depuis le total si dispo
-    const p = booking?.pricing || {};
-    const v =
-      p?.total ??
-      p?.total_price ??
-      p?.grand_total ??
-      p?.amount_total ??
-      null;
+  const priceTotal = useMemo(
+    () => (pricingNumbers.total != null ? toMoneyEUR(pricingNumbers.total) : ""),
+    [pricingNumbers.total]
+  );
 
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "";
-    return toMoneyEUR(n * 0.3);
-  }, [booking.pricing]);
+  const deposit30 = useMemo(
+    () => (pricingNumbers.deposit30 != null ? toMoneyEUR(pricingNumbers.deposit30) : ""),
+    [pricingNumbers.deposit30]
+  );
+
+  const solde70 = useMemo(
+    () => (pricingNumbers.solde != null ? toMoneyEUR(pricingNumbers.solde) : ""),
+    [pricingNumbers.solde]
+  );
+
+  const contractTodayFR = useMemo(() => {
+    try {
+      return new Date().toLocaleDateString("fr-FR");
+    } catch {
+      return "";
+    }
+  }, []);
 
   const contractText = useMemo(() => {
     const occupantsText = occupants
@@ -179,16 +250,23 @@ export default function ContractClient({ booking, token, existing }: Props) {
         .filter(Boolean)
         .join(", ") || "[Adresse à compléter]";
 
-    // IMPORTANT: le texte ci-dessous contient TOUT le contrat + annexes,
-    // sans suppression. Les champs [____] restent visibles si une info n'est pas connue.
+    const accommodationText =
+      pricingNumbers.accommodation != null ? toMoneyEUR(pricingNumbers.accommodation) : "[____ €]";
+
+    const optionsText =
+      pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
+
+    const touristTaxText =
+      pricingNumbers.touristTax != null ? toMoneyEUR(pricingNumbers.touristTax) : "[____ €]";
+
     return `CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —
 
 1) Parties
 Propriétaire (Bailleur)
-Nom / Prénom : ${OWNER.name || "[]"}
-Adresse : ${OWNER.address || "[]"}
-E-mail : ${OWNER.email || "[]"}
-Téléphone : ${OWNER.phone || "[]"}
+Nom / Prénom : ${OWNER.name}
+Adresse : ${OWNER.address}
+E-mail : ${OWNER.email}
+Téléphone : ${OWNER.phone}
 
 Locataire
 Nom / Prénom : ${booking.full_name || "[]"}
@@ -200,7 +278,7 @@ Le locataire déclare être majeur et avoir la capacité de contracter.
 
 2) Logement loué
 Désignation : Location saisonnière meublée
-Adresse du logement : ${PROPERTY_ADDRESS || "[____________________]"}
+Adresse du logement : ${PROPERTY_ADDRESS}
 Capacité maximale : 8 personnes (voir Article 11).
 Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
 
@@ -214,7 +292,7 @@ Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(
       booking.departure_date
     )} pour ${nights} nuits.
-Horaires standard (selon ton site)
+Horaires standard
 Arrivée (check-in) : entre 16h et 18h
 Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
 Options (si accord préalable et selon disponibilités) :
@@ -223,10 +301,10 @@ Départ fin de journée : +70€
 
 4) Prix — Taxes — Prestations
 Prix total du séjour : ${priceTotal || "[____ €]"} comprenant :
-Hébergement : [____ €]
+Hébergement : ${accommodationText}
 Forfait ménage : 100€
-Options éventuelles : [____ €]
-Taxe de séjour : [____ €] (si applicable / selon règles locales)
+Options éventuelles : ${optionsText}
+Taxe de séjour : ${touristTaxText} (si applicable / selon règles locales)
 
 5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
 Mode de paiement : virement bancaire uniquement.
@@ -237,7 +315,7 @@ Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
-Le solde, soit [____ €], doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
+Le solde, soit ${solde70 || "[____ €]"}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
 À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de relance, le propriétaire pourra considérer la réservation comme annulée par le locataire, l’acompte restant acquis au propriétaire.
 
 6) Formation du contrat — Réservation
@@ -312,17 +390,26 @@ Contrat entre particuliers. En cas de difficulté, les parties recherchent une s
 À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
 
 Signatures
-Fait à [ville], le [date].
+Fait à Carcès, le ${contractTodayFR || "[date]"}.
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
+ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
+(Repris du site.)
+
+ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
+(Repris du site.)
+
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
 (On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
 
-✅ Structure du contrat (version actuelle — “ma base”)
+ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
+(À signer sur place.)
+
+✅ Structure du contrat
 Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide :
 A) Identification des parties
 Propriétaire (bailleur) : identité + coordonnées
@@ -416,6 +503,13 @@ ${occupantsText}
     nights,
     priceTotal,
     deposit30,
+    solde70,
+    OWNER,
+    PROPERTY_ADDRESS,
+    pricingNumbers.accommodation,
+    pricingNumbers.options,
+    pricingNumbers.touristTax,
+    contractTodayFR,
   ]);
 
   const allOccupantsFilled = useMemo(() => {
@@ -426,6 +520,20 @@ ${occupantsText}
       return Boolean(fn && ln && ag);
     });
   }, [occupants]);
+
+  function addOccupant() {
+    if (isSigned) return;
+    if (occupants.length >= maxOccupants) return;
+    setOccupants((prev) => [...prev, { first_name: "", last_name: "", age: "" }]);
+  }
+
+  function removeOccupant(index: number) {
+    if (isSigned) return;
+    setOccupants((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+  }
 
   async function onSubmit() {
     setError(null);
@@ -443,8 +551,13 @@ ${occupantsText}
       return;
     }
 
-    if (occupants.length !== hardCount) {
-      setError(`Vous devez renseigner exactement ${hardCount} personne(s), comme dans votre demande.`);
+    if (occupants.length < 1) {
+      setError("Ajoutez au moins une personne (nom, prénom, âge).");
+      return;
+    }
+
+    if (occupants.length > maxOccupants) {
+      setError(`Maximum ${maxOccupants} personne(s).`);
       return;
     }
 
@@ -530,7 +643,11 @@ ${occupantsText}
                   <div>
                     <span className="font-semibold">Personnes demandées :</span> {expectedCount} (adultes + enfants)
                   </div>
-                ) : null}
+                ) : (
+                  <div>
+                    <span className="font-semibold">Personnes :</span> jusqu’à 8
+                  </div>
+                )}
               </div>
             </div>
 
@@ -588,52 +705,76 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Occupants (exact count) */}
+          {/* Occupants */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">
-              PERSONNES PRÉSENTES PENDANT LA LOCATION (NOM, PRÉNOM, ÂGE) — EXACTEMENT {hardCount}
+              PERSONNES PRÉSENTES PENDANT LA LOCATION (NOM, PRÉNOM, ÂGE) — MAX {maxOccupants}
             </div>
 
             <div className="mt-4 space-y-3">
               {occupants.map((o, i) => (
-                <div key={i} className="grid gap-3 md:grid-cols-3">
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Prénom *"
-                    value={o.first_name}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
-                    }}
-                    disabled={isSigned}
-                  />
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Nom *"
-                    value={o.last_name}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
-                    }}
-                    disabled={isSigned}
-                  />
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Âge *"
-                    value={o.age}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
-                    }}
-                    disabled={isSigned}
-                    inputMode="numeric"
-                  />
+                <div key={i} className="space-y-2">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Prénom *"
+                      value={o.first_name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
+                      }}
+                      disabled={isSigned}
+                    />
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Nom *"
+                      value={o.last_name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
+                      }}
+                      disabled={isSigned}
+                    />
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Âge *"
+                      value={o.age}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
+                      }}
+                      disabled={isSigned}
+                      inputMode="numeric"
+                    />
+                  </div>
+
+                  {occupants.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeOccupant(i)}
+                      disabled={isSigned}
+                      className="text-xs text-slate-600 underline disabled:opacity-50"
+                    >
+                      Supprimer cette personne
+                    </button>
+                  ) : null}
                 </div>
               ))}
             </div>
 
-            <div className="mt-3 text-sm text-slate-600">
-              Pour signer, toutes les personnes (nom, prénom, âge) doivent être renseignées.
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={addOccupant}
+                disabled={isSigned || occupants.length >= maxOccupants}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                + Ajouter une personne
+              </button>
+
+              <div className="text-sm text-slate-600">
+                Pour signer, toutes les personnes (nom, prénom, âge) doivent être renseignées.
+              </div>
             </div>
           </div>
 
@@ -649,9 +790,7 @@ ${occupantsText}
                 onChange={(e) => setAcceptedTerms(e.target.checked)}
                 disabled={isSigned}
               />
-              <span>
-                J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.
-              </span>
+              <span>J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.</span>
             </label>
 
             {error ? (

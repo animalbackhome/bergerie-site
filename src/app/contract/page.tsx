@@ -60,6 +60,31 @@ function normalizeRid(rid: string | undefined) {
   return null;
 }
 
+function __buildFullName(row: any): string {
+  const direct =
+    row?.full_name ??
+    row?.fullName ??
+    row?.name ??
+    row?.fullname ??
+    row?.full ??
+    "";
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const first =
+    (typeof row?.first_name === "string" ? row.first_name : "") ||
+    (typeof row?.firstname === "string" ? row.firstname : "") ||
+    (typeof row?.firstName === "string" ? row.firstName : "") ||
+    "";
+  const last =
+    (typeof row?.last_name === "string" ? row.last_name : "") ||
+    (typeof row?.lastname === "string" ? row.lastname : "") ||
+    (typeof row?.lastName === "string" ? row.lastName : "") ||
+    "";
+
+  const joined = `${String(first || "").trim()} ${String(last || "").trim()}`.trim();
+  return joined;
+}
+
 export default async function ContractPage(props: PageProps) {
   const sp = await resolveSearchParams((props as any).searchParams);
   const rid = normalizeRid(getParam(sp, "rid"));
@@ -108,9 +133,14 @@ export default async function ContractPage(props: PageProps) {
     rid: (bookingRaw as any).id, // ✅ fallback ultra robuste
 
     // identité
-    full_name: (bookingRaw as any).full_name ?? (bookingRaw as any).name ?? "",
+    full_name: __buildFullName(bookingRaw),
     email: (bookingRaw as any).email ?? "",
     phone: (bookingRaw as any).phone ?? "",
+
+    // ✅ pour permettre plusieurs personnes (adultes + enfants)
+    adults_count: (bookingRaw as any).adults_count ?? null,
+    children_count: (bookingRaw as any).children_count ?? null,
+    animals_count: (bookingRaw as any).animals_count ?? null,
 
     // dates
     arrival_date:
@@ -157,6 +187,10 @@ export default async function ContractPage(props: PageProps) {
     .maybeSingle();
 
   return (
-    <ContractClient booking={booking as any} token={t} existing={(existing as any) || null} />
+    <ContractClient
+      booking={booking as any}
+      token={t}
+      existing={(existing as any) || null}
+    />
   );
 }
