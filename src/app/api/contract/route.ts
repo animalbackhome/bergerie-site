@@ -93,44 +93,28 @@ function parseContractDateFR(
     return { ok: false };
   }
 
-  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(
-    2,
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(
+    4,
     "0"
-  )}/${String(yyyy).padStart(4, "0")}`;
+  )}`;
 
   return { ok: true, normalized };
 }
 
-// ✅ RIB FIXE (pop-up + emails + contrat)
-const BANK_DETAILS = {
-  beneficiary: "Coralie Laurens",
-  iban: "FR76 2823 3000 0105 5571 3835 979",
-  bic: "REVOFRP2",
-};
-
 /**
- * ✅ Options éventuelles :
- * - si options_total existe (ou alias) -> on l’utilise (source de vérité)
- * - sinon : somme des champs numériques "options" existants,
- *   en excluant les postes non-options (total, base, ménage, taxe, etc.)
+ * ✅ Options éventuelles = somme de TOUTES les options réellement présentes dans pricing,
+ * sans inventer, et sans compter les champs "non-options" (total, taxes, base, etc.)
  */
 function computeOptionsTotalFromPricing(pricing: any): number {
   const p = pricing && typeof pricing === "object" ? pricing : {};
 
-  const direct =
-    pickNumber(p, ["options_total", "extras_total", "addon_total", "add_ons_total"]) ?? null;
-  if (direct != null) return round2(direct);
-
+  // Champs connus "non-options" à EXCLURE de la somme des options
   const excluded = new Set<string>([
     "currency",
-
-    // totals
     "total",
     "total_price",
     "grand_total",
     "amount_total",
-
-    // base / accommodation
     "base_accommodation",
     "base",
     "base_total",
@@ -140,49 +124,118 @@ function computeOptionsTotalFromPricing(pricing: any): number {
     "stay_total",
     "lodging",
     "lodging_total",
-
-    // cleaning
     "cleaning",
     "cleaning_fee",
     "cleaningFee",
     "menage",
-
-    // tax
     "tourist_tax",
     "taxe_sejour",
     "taxe_de_sejour",
     "city_tax",
     "local_tax",
-    "tax",
-    "taxes",
-
-    // other non-option metadata
-    "subtotal",
-    "nights",
-    "nightly_rate",
-    "rate",
-    "adults",
-    "children",
-
-    // avoid double count if present
+    // éviter double comptage
     "options_total",
     "extras_total",
-    "addon_total",
-    "add_ons_total",
     "extras",
     "options",
+    "addon_total",
+    "add_ons_total",
   ]);
 
   let sum = 0;
+
   for (const [k, v] of Object.entries(p)) {
     if (excluded.has(k)) continue;
+
     const n = Number(v);
     if (!Number.isFinite(n)) continue;
+
     sum += n;
   }
 
   return round2(sum);
 }
+
+// ✅ Annexes (repris du site) — insérés dans le mail PDF-like (texte)
+const ANNEXE_1 = `(État descriptif du logement — repris du site)
+
+- Logement entier (bergerie)
+- Capacité : 8 personnes
+- Extérieurs : jardin / terrasse, espace repas extérieur, barbecue/plancha, transats
+- Piscine privée (avec alarme) + petit bassin naturel
+- Stationnement gratuit sur place (parking)
+- Accès : arrivée autonome possible (selon modalités), accès par chemin privé
+- Connexion Internet : Starlink (maxi vitesse par satellite)
+- Chauffage : poêle à bois + chauffage
+- Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur`;
+const ANNEXE_2 = `(Inventaire / équipements — repris du site)
+
+SALLE DE BAIN
+- 2 sèche-cheveux
+- 2 douches à l’italienne
+- Machine à laver
+- Produits de nettoyage
+- Shampooing, savon pour le corps, gel douche
+- Eau chaude
+
+CHAMBRE & LINGE
+- Équipements de base (serviettes, draps, savon, papier toilette)
+- Grand dressing, cintres
+- Draps, couettes, couvertures supplémentaires
+- 4 oreillers par lit + traversins
+- Tables de nuit, lampes de chevet, stores
+- Fer à repasser, étendoir à linge, moustiquaire
+- Espace de rangement pour vêtements
+
+CUISINE & REPAS
+- Cuisine équipée : plaque de cuisson, four, micro-ondes, réfrigérateur, congélateur
+- Lave-vaisselle
+- Ustensiles de cuisine, casseroles, poêles
+- Vaisselle et couverts
+- Cafetière, bouilloire, grille-pain
+- Verres à vin / flûtes, etc.
+
+DIVERTISSEMENT
+- Télévision (chaînes + Netflix + jeux vidéos)
+- Livres & de quoi lire
+- Jeux extérieurs/intérieurs pour enfants
+- Terrain de boules, badminton, panier de basket
+- Jeux aquatiques
+- Piscine
+
+FAMILLE
+- Lit pour bébé + lit parapluie
+- Chaise haute
+- Salle de jeux pour enfants
+- Aire de jeux extérieure
+- Pare-feu pour le poêle
+- Alarme de sécurité pour piscine
+
+RANDONNÉES / NATURE
+- Accès proche : lac, rivière, cascades, canal, forêt
+
+JEUX POUR ADULTES
+- Jeux de société, cartes, etc.`;
+const ANNEXE_3 = `(Règlement intérieur — repris du site)
+
+RESPECT DU LIEU
+- Maison non-fumeur (possible en extérieur uniquement).
+- Fêtes et enterrements de vie de jeune fille / garçon non acceptés.
+- Nombre de voyageurs : 8 personnes et plus sur demande avec supplément.
+- Pas de visiteurs extérieurs sans accord.
+
+PISCINE
+- Enfants sous surveillance obligatoire (piscine non clôturée avec alarme de sécurité).
+- Interdit de plonger (profondeur variable).
+- Merci de se rincer avant baignade (crème/huile).
+
+ANIMAUX
+- Animaux acceptés uniquement sur demande (à préciser avant réservation), sans limite de nombre et reminder : supplément.
+- Merci de ramasser les excréments et de respecter l’intérieur (poils / boue / griffes sur canapé/lits...).
+
+MÉNAGE / LINGE
+- La maison doit être rendue “correcte” (vaisselle, poubelles, etc.).
+- Serviettes fournies : merci de ne pas les utiliser pour l’extérieur / piscine.`;
 
 function buildFullContractText(args: {
   ownerName: string;
@@ -210,10 +263,6 @@ function buildFullContractText(args: {
   occupantsText: string;
 
   signatureDate: string; // ✅ date SAISIE par le locataire (JJ/MM/AAAA)
-
-  bankBeneficiary: string;
-  bankIban: string;
-  bankBic: string;
 }) {
   const {
     ownerName,
@@ -236,9 +285,6 @@ function buildFullContractText(args: {
     address,
     occupantsText,
     signatureDate,
-    bankBeneficiary,
-    bankIban,
-    bankBic,
   } = args;
 
   const nights = nightsBetween(arrivalYmd, departureYmd);
@@ -275,9 +321,9 @@ Capacité maximale : 8 personnes (voir Article 11).
 Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
 
 Annexes (faisant partie intégrante du contrat) :
-Annexe 1 : État descriptif du logement (repris du site)
-Annexe 2 : Inventaire / liste équipements (repris du site)
-Annexe 3 : Règlement intérieur (repris et signé)
+Annexe 1 : État descriptif du logement
+Annexe 2 : Inventaire / liste équipements
+Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
@@ -294,16 +340,11 @@ Prix total du séjour : ${totalPrice || "[____ €]"} comprenant :
 Hébergement : ${accommodation || "[____ €]"}
 Forfait ménage : ${cleaning || "100€"}
 Options éventuelles : ${options || "[____ €]"}
-Taxe de séjour : ${touristTax || "[____ €]"} (si applicable / selon règles locales)
+Taxe de séjour : ${touristTax || "[____ €]"}
 
 5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
 Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
-
-RIB (virement bancaire)
-Bénéficiaire : ${bankBeneficiary}
-IBAN : ${bankIban}
-BIC : ${bankBic}
 
 5.1 Acompte (30%)
 Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
@@ -321,71 +362,60 @@ Le solde reste exigible selon l’Article 5.2.
 
 7) Absence de droit de rétractation
 Le locataire est informé que, pour une prestation d’hébergement fournie à une date déterminée, il ne bénéficie pas d’un droit de rétractation.
-➡️ Les conditions d’annulation applicables sont celles prévues à l’Article 8.
 
 8) Annulation / Non-présentation / Séjour écourté
 8.1 Annulation par le locataire
 Toute annulation doit être notifiée par écrit (e-mail + recommandé conseillé).
 a) Quel que soit le motif, l’acompte de 30% reste définitivement acquis au propriétaire.
-b) À compter du paiement du solde (J-7 avant l’arrivée), aucun remboursement ne sera effectué, quel que soit le motif d’annulation ou d’empêchement, et le locataire reste redevable de la totalité du séjour.
+b) À compter du paiement du solde (J-7 avant l’arrivée), aucun remboursement ne sera effectué.
 c) Si le séjour est écourté, aucun remboursement n’est dû.
 
 8.2 Non-présentation (“no-show”)
-Si le locataire ne se manifeste pas et n’a pas convenu d’une arrivée différée :
+Si le locataire ne se manifeste pas :
 à partir de minuit (00h00) le jour d’arrivée, l’entrée dans les lieux n’est plus possible ;
 si le locataire ne donne aucune nouvelle avant le lendemain 10h, le propriétaire peut considérer la réservation comme annulée, disposer du logement, et conserver les sommes versées (hors taxe de séjour si non due).
 
 9) Annulation par le propriétaire
 En cas d’annulation par le propriétaire (hors force majeure), celui-ci remboursera au locataire l’intégralité des sommes effectivement versées dans un délai de 7 jours.
-Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure.
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
-Le ménage de fin de séjour est assuré par le propriétaire dans la limite d’un usage normal.
-Le barbecue/plancha doivent être rendus propres. Les frais de remise en état, nettoyage exceptionnel, ou dégradations peuvent être facturés.
 
 12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)
 Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée.
 Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre :
 dégradations, pertes, casse, nettoyage anormal, non-respect du règlement intérieur.
-En cas de retenue, le propriétaire pourra fournir, selon le cas, photos + devis/factures justifiant la retenue.
 
 13) Identité du locataire
-À l’arrivée, le locataire s’engage à présenter une pièce d’identité au nom de la personne ayant réservé, uniquement pour vérification d’identité.
-Aucun numéro de pièce n’est relevé ni conservé.
+Présentation d’une pièce d’identité à l’arrivée (vérification uniquement). Aucun numéro de pièce n’est conservé.
 
 14) Capacité — Personnes supplémentaires — Visiteurs
 Capacité maximale : 8 personnes.
-Toute personne supplémentaire non autorisée peut entraîner la résiliation immédiate sans remboursement.
-Supplément : 50€/personne/nuit et 50€/personne en journée (même sans nuitée), selon accord préalable.
+Supplément : 50€/personne/nuit et 50€/personne en journée, selon accord préalable.
 
 15) Animaux
-Animaux acceptés selon conditions.
 Supplément : 10€ par chien et par nuit (à régler à l’arrivée, sauf indication contraire).
-Le locataire s’engage à maintenir la propreté, éviter toute dégradation et ramasser les déjections à l’extérieur.
 
 16) Caméras (information)
-Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs (entrée/accès), à des fins de sécurité.
-Aucune caméra n’est présente à l’intérieur du logement.
+Caméras uniquement sur les accès extérieurs, à des fins de sécurité. Aucune caméra à l’intérieur.
 
 17) Assurance
-Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent). Il est conseillé de souscrire une assurance annulation.
+Le locataire déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent).
 
 18) Utilisation paisible — Règlement intérieur
-Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
+Respect du Règlement intérieur (Annexe 3).
 
 19) Cession / Sous-location
-La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
+Interdite sans accord écrit.
 
 20) Litiges
-Contrat entre particuliers. En cas de difficulté, les parties recherchent une solution amiable.
-À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
+Recherche de solution amiable, puis juridictions compétentes.
 
 Signatures
-Fait à Carcès, le ${signatureDate || "[date]"}
+Fait à Carcès, le ${signatureDate || "[date]"}.
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
@@ -393,19 +423,19 @@ Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
 ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
-(Repris du site.)
+${ANNEXE_1}
 
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-(Repris du site.)
+${ANNEXE_2}
 
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-(On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
+${ANNEXE_3}
+
+Signature du locataire (Annexe 3 — “Lu et approuvé”) :
+[____________________]
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
-
-✅ Structure du contrat
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -433,12 +463,16 @@ export async function GET(req: Request) {
   if (error) return jsonError(error.message, 500);
   if (!booking) return jsonError("Booking request not found", 404);
 
-  const okToken = verifyContractToken({
-    rid,
-    email: booking.email,
-    secret: BOOKING_MODERATION_SECRET,
-    token: t,
-  });
+  // ✅ Si "t" absent => on autorise (fallback) — même logique que /contract
+  const okToken = t
+    ? verifyContractToken({
+        rid,
+        email: booking.email,
+        secret: BOOKING_MODERATION_SECRET,
+        token: t,
+      })
+    : true;
+
   if (!okToken) return jsonError("Invalid token", 403);
 
   const { data: contract, error: cErr } = await supabase
@@ -474,7 +508,7 @@ export async function POST(req: Request) {
   const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
   const acceptedTerms = Boolean(body?.accepted_terms);
 
-  // ✅ NOUVEAU : date du contrat obligatoire (JJ/MM/AAAA)
+  // ✅ Date contrat obligatoire (JJ/MM/AAAA)
   const contractDateRaw = mustStr(body?.contract_date);
   const parsedContractDate = parseContractDateFR(contractDateRaw);
   if (!parsedContractDate.ok) {
@@ -515,12 +549,16 @@ export async function POST(req: Request) {
   if (bookingErr) return jsonError(bookingErr.message, 500);
   if (!booking) return jsonError("Booking request not found", 404);
 
-  const okToken = verifyContractToken({
-    rid,
-    email: booking.email,
-    secret: BOOKING_MODERATION_SECRET,
-    token: t,
-  });
+  // ✅ Si "t" absent => on autorise (fallback) — même logique que /contract
+  const okToken = t
+    ? verifyContractToken({
+        rid,
+        email: booking.email,
+        secret: BOOKING_MODERATION_SECRET,
+        token: t,
+      })
+    : true;
+
   if (!okToken) return jsonError("Invalid token", 403);
 
   const { data: saved, error: upErr } = await supabase
@@ -534,10 +572,7 @@ export async function POST(req: Request) {
         signer_city: city,
         signer_country: country,
         occupants: normOccupants,
-
-        // ✅ NOUVEAU : sauvegarde en base
         contract_date: contractDate,
-
         ip: req.headers.get("x-forwarded-for") || null,
         user_agent: req.headers.get("user-agent") || null,
       },
@@ -553,46 +588,24 @@ export async function POST(req: Request) {
   // ✅ Email : contrat complet avec montants auto-remplis
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
+  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}${t ? `&t=${encodeURIComponent(t)}` : ""}` : "";
 
   const arrivalYmd = String(booking.start_date || "").trim();
   const departureYmd = String(booking.end_date || "").trim();
 
   const p = booking?.pricing || {};
 
-  // ✅ Source de vérité : total si présent
-  const totalN = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
-
-  // ✅ Forfait ménage fixe : 100€
+  const totalN = pickNumber(p, ["total"]) ?? null;
   const cleaningN = 100;
-
-  // ✅ Taxe de séjour si présente
-  const touristTaxN =
-    pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
-
-  // ✅ Options : conforme à la règle anti-double comptage
+  const touristTaxN = pickNumber(p, ["tourist_tax"]) ?? 0;
   const optionsN = computeOptionsTotalFromPricing(p);
 
-  // ✅ Hébergement : champ direct si présent, sinon déduit du total (si total présent)
-  let accommodationN =
-    pickNumber(p, [
-      "base_accommodation",
-      "base",
-      "base_total",
-      "accommodation",
-      "accommodation_total",
-      "stay",
-      "stay_total",
-      "lodging",
-      "lodging_total",
-    ]) ?? null;
-
+  let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
     accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
   }
 
-  // ✅ Acompte / solde depuis total (si total présent)
   const deposit30N = totalN != null ? round2(totalN * 0.3) : null;
   const soldeN = totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
 
@@ -602,7 +615,6 @@ export async function POST(req: Request) {
     .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
     .join("\n");
 
-  // ✅ Propriétaire & adresse logement FIXES (non dynamiques)
   const ownerName = "Laurens Coralie";
   const ownerAddress = "2542 chemin des près neufs 83570 Carcès";
   const ownerEmail = "laurens-coralie@hotmail.com";
@@ -629,25 +641,10 @@ export async function POST(req: Request) {
     soldeN,
     address: addressText,
     occupantsText,
-    // ✅ Date saisie (obligatoire)
     signatureDate: contractDate,
-
-    // ✅ RIB FIXE
-    bankBeneficiary: BANK_DETAILS.beneficiary,
-    bankIban: BANK_DETAILS.iban,
-    bankBic: BANK_DETAILS.bic,
   });
 
   const subjectOwner = `Contrat signé — Demande #${rid}`;
-
-  const bankHtml = `
-    <div style="margin:12px 0;padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb">
-      <div style="font-weight:700;margin-bottom:6px">RIB (virement bancaire)</div>
-      <div><b>Bénéficiaire :</b> ${escapeHtml(BANK_DETAILS.beneficiary)}</div>
-      <div><b>IBAN :</b> ${escapeHtml(BANK_DETAILS.iban)}</div>
-      <div><b>BIC :</b> ${escapeHtml(BANK_DETAILS.bic)}</div>
-    </div>
-  `;
 
   const htmlOwner = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
@@ -657,7 +654,6 @@ export async function POST(req: Request) {
       ${totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""}
       <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
       <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(/\n/g, "<br/>")}</p>
-      ${bankHtml}
       ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
       <hr/>
       <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
@@ -685,11 +681,9 @@ export async function POST(req: Request) {
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
         <h2>Merci ! Votre contrat est signé ✅</h2>
         <p>Vous pouvez conserver ce message comme preuve.</p>
-        ${bankHtml}
         ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
         <hr/>
         <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
-        <p style="margin-top:16px">Très cordialement<br/>Laurens Coralie</p>
       </div>
     `,
   });
@@ -702,6 +696,6 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }

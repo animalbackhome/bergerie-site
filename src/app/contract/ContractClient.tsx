@@ -89,18 +89,6 @@ function expectedPeopleCount(booking: Booking): number | null {
   return total > 0 ? total : null;
 }
 
-function signedDateFRFromIso(iso: string | null | undefined): string | null {
-  const s = String(iso || "").trim();
-  if (!s) return null;
-  const dt = new Date(s);
-  if (Number.isNaN(dt.getTime())) return null;
-  try {
-    return dt.toLocaleDateString("fr-FR");
-  } catch {
-    return null;
-  }
-}
-
 // ✅ Date contrat (JJ/MM/AAAA) : validation stricte + date réelle (pas 31/02)
 function parseContractDateFR(input: string): { ok: true; normalized: string } | { ok: false } {
   const s = String(input || "").trim();
@@ -122,10 +110,94 @@ function parseContractDateFR(input: string): { ok: true; normalized: string } | 
     return { ok: false };
   }
 
-  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(4, "0")}`;
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(
+    4,
+    "0"
+  )}`;
 
   return { ok: true, normalized };
 }
+
+// ✅ Annexes (repris du site) — affichés dans le contrat
+const ANNEXE_1 = `(État descriptif du logement — repris du site)
+
+- Logement entier (bergerie)
+- Capacité : 8 personnes
+- Extérieurs : jardin / terrasse, espace repas extérieur, barbecue/plancha, transats
+- Piscine privée (avec alarme) + petit bassin naturel
+- Stationnement gratuit sur place (parking)
+- Accès : arrivée autonome possible (selon modalités), accès par chemin privé
+- Connexion Internet : Starlink (maxi vitesse par satellite)
+- Chauffage : poêle à bois + chauffage
+- Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur`;
+const ANNEXE_2 = `(Inventaire / équipements — repris du site)
+
+SALLE DE BAIN
+- 2 sèche-cheveux
+- 2 douches à l’italienne
+- Machine à laver
+- Produits de nettoyage
+- Shampooing, savon pour le corps, gel douche
+- Eau chaude
+
+CHAMBRE & LINGE
+- Équipements de base (serviettes, draps, savon, papier toilette)
+- Grand dressing, cintres
+- Draps, couettes, couvertures supplémentaires
+- 4 oreillers par lit + traversins
+- Tables de nuit, lampes de chevet, stores
+- Fer à repasser, étendoir à linge, moustiquaire
+- Espace de rangement pour vêtements
+
+CUISINE & REPAS
+- Cuisine équipée : plaque de cuisson, four, micro-ondes, réfrigérateur, congélateur
+- Lave-vaisselle
+- Ustensiles de cuisine, casseroles, poêles
+- Vaisselle et couverts
+- Cafetière, bouilloire, grille-pain
+- Verres à vin / flûtes, etc.
+
+DIVERTISSEMENT
+- Télévision (chaînes + Netflix + jeux vidéos)
+- Livres & de quoi lire
+- Jeux extérieurs/intérieurs pour enfants
+- Terrain de boules, badminton, panier de basket
+- Jeux aquatiques
+- Piscine
+
+FAMILLE
+- Lit pour bébé + lit parapluie
+- Chaise haute
+- Salle de jeux pour enfants
+- Aire de jeux extérieure
+- Pare-feu pour le poêle
+- Alarme de sécurité pour piscine
+
+RANDONNÉES / NATURE
+- Accès proche : lac, rivière, cascades, canal, forêt
+
+JEUX POUR ADULTES
+- Jeux de société, cartes, etc.`;
+const ANNEXE_3 = `(Règlement intérieur — repris du site)
+
+RESPECT DU LIEU
+- Maison non-fumeur (possible en extérieur uniquement).
+- Fêtes et enterrements de vie de jeune fille / garçon non acceptés.
+- Nombre de voyageurs : 8 personnes et plus sur demande avec supplément.
+- Pas de visiteurs extérieurs sans accord.
+
+PISCINE
+- Enfants sous surveillance obligatoire (piscine non clôturée avec alarme de sécurité).
+- Interdit de plonger (profondeur variable).
+- Merci de se rincer avant baignade (crème/huile).
+
+ANIMAUX
+- Animaux acceptés uniquement sur demande (à préciser avant réservation), sans limite de nombre et reminder : supplément.
+- Merci de ramasser les excréments et de respecter l’intérieur (poils / boue / griffes sur canapé/lits...).
+
+MÉNAGE / LINGE
+- La maison doit être rendue “correcte” (vaisselle, poubelles, etc.).
+- Serviettes fournies : merci de ne pas les utiliser pour l’extérieur / piscine.`;
 
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES (comme demandé)
@@ -135,16 +207,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
       address: "2542 chemin des près neufs 83570 Carcès",
       email: "laurens-coralie@hotmail.com",
       phone: "0629465295",
-    }),
-    []
-  );
-
-  // ✅ RIB FIXE (virement)
-  const BANK = useMemo(
-    () => ({
-      beneficiary: "Coralie Laurens",
-      iban: "FR76 2823 3000 0105 5571 3835 979",
-      bic: "REVOFRP2",
     }),
     []
   );
@@ -177,9 +239,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [signedOk, setSignedOk] = useState(false);
-
-  // ✅ date figée au moment de la signature (si on vient de signer sans reload)
-  const [signedDateLocal, setSignedDateLocal] = useState<string | null>(null);
 
   const isSigned = Boolean(existing?.signed_at) || signedOk;
 
@@ -329,14 +388,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
     pricingNumbers.solde,
   ]);
 
-  const contractTodayFR = useMemo(() => {
-    try {
-      return new Date().toLocaleDateString("fr-FR");
-    } catch {
-      return "";
-    }
-  }, []);
-
   // ✅ Affichage dans "Fait à Carcès, le …" :
   // - si contrat déjà signé => date enregistrée (existing.contract_date)
   // - sinon => date saisie par l’utilisateur (contractDate)
@@ -405,6 +456,7 @@ Le logement est loué à titre de résidence de vacances. Le locataire ne pourra
 Annexes (faisant partie intégrante du contrat) :
 Annexe 1 : État descriptif du logement
 Annexe 2 : Inventaire / liste équipements
+Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
@@ -426,12 +478,6 @@ Taxe de séjour : ${touristTaxText} (si applicable / selon règles locales)
 5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
 Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
-
-
-Coordonnées bancaires (RIB) :
-Bénéficiaire : ${BANK.beneficiary}
-IBAN : ${BANK.iban}
-BIC : ${BANK.bic}
 
 5.1 Acompte (30%)
 Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
@@ -468,7 +514,7 @@ En cas d’annulation par le propriétaire (hors force majeure), celui-ci rembou
 Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
@@ -502,8 +548,8 @@ Aucune caméra n’est présente à l’intérieur du logement.
 17) Assurance
 Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent). Il est conseillé de souscrire une assurance annulation.
 
-18) Utilisation paisible
-Le locataire s’engage à une jouissance paisible des lieux.
+18) Utilisation paisible — Règlement intérieur
+Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
 
 19) Cession / Sous-location
 La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
@@ -521,16 +567,19 @@ Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
 ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
-(Repris du site.)
+${ANNEXE_1}
 
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-(Repris du site.)
+${ANNEXE_2}
+
+ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
+${ANNEXE_3}
+
+Signature du locataire (Annexe 3 — “Lu et approuvé”) :
+[____________________]
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
-
-✅ Structure du contrat
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -553,7 +602,6 @@ ${occupantsText}
     deposit30,
     solde70,
     OWNER,
-    BANK,
     PROPERTY_ADDRESS,
     pricingNumbers.accommodation,
     pricingNumbers.cleaning,
@@ -651,13 +699,6 @@ ${occupantsText}
         return;
       }
 
-      // ✅ fige la date au moment exact où l’utilisateur signe (sans attendre un reload)
-      try {
-        setSignedDateLocal(new Date().toLocaleDateString("fr-FR"));
-      } catch {
-        setSignedDateLocal(null);
-      }
-
       // ✅ fige aussi la date de contrat côté UI (ce que l'utilisateur a saisi)
       setContractDate(parsed.normalized);
 
@@ -699,7 +740,7 @@ ${occupantsText}
                   <span className="font-semibold">Téléphone :</span> {booking.phone || "—"}
                 </div>
                 <div>
-                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} →{" "}
+                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} → 
                   {formatDateFR(booking.departure_date)} ({nights} nuit(s))
                 </div>
                 {priceTotal ? (
