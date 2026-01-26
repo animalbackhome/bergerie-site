@@ -114,7 +114,9 @@ function pickFirst(body: any, keys: string[]) {
     body?.wood,
     body?.visitors,
     body?.extra_people,
-    body?.extraPeople
+    body?.extraPeople,
+    body?.extra_sleepers,
+    body?.extraSleepers,
   ];
 
   for (const k of keys) {
@@ -581,21 +583,47 @@ export async function POST(req: Request) {
           ? `${animals_count} (autre - ${other_animal_label})`
           : `${animals_count} (${animal_type || "—"})`;
 
+    // ✅ FIX: le formulaire client envoie woodQuarterSteres
     const wood_quarters = Math.max(
       0,
-      pickInt(body as any, ["wood_quarters", "woodQuarters", "wood_quarter", "woodQuarter", "wood"], 0)
+      pickInt(body as any, [
+        "wood_quarters",
+        "woodQuarters",
+        "wood_quarter",
+        "woodQuarter",
+        "woodQuarterSteres",
+        "wood_quarter_steres",
+        "wood",
+      ], 0)
     );
+
     const visitors_count = Math.max(
       0,
       pickInt(body as any, ["visitors_count", "visitorsCount", "visitor_count", "visitorCount", "visitors"], 0)
     );
+
+    // ✅ FIX: le formulaire client envoie extraSleepersCount / extraSleepersNights
     const extra_people_count = Math.max(
       0,
-      pickInt(body as any, ["extra_people_count", "extraPeopleCount", "extra_people", "extraPeople"], 0)
+      pickInt(body as any, [
+        "extra_people_count",
+        "extraPeopleCount",
+        "extra_people",
+        "extraPeople",
+        "extraSleepersCount",
+        "extra_sleepers_count",
+      ], 0)
     );
     const extra_people_nights = Math.max(
       0,
-      pickInt(body as any, ["extra_people_nights", "extraPeopleNights", "extra_people_night", "extraPeopleNight"], 0)
+      pickInt(body as any, [
+        "extra_people_nights",
+        "extraPeopleNights",
+        "extra_people_night",
+        "extraPeopleNight",
+        "extraSleepersNights",
+        "extra_sleepers_nights",
+      ], 0)
     );
 
     const early_arrival = pickBool(body as any, ["early_arrival", "earlyArrival", "early_checkin", "earlyCheckin"]);
