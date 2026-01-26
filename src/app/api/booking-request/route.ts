@@ -816,9 +816,8 @@ export async function POST(req: Request) {
           extra_people_count,
           extra_people_nights,
           early_arrival,
-          late_departure,
-          baseAccommodation_seasonal: seasonalAccommodation.base,
-          seasonalNightly: seasonalAccommodation.nightly,
+          late_departure,          // Note: la base hébergement vient du calcul serveur (pricing.base_accommodation)
+          baseAccommodation: pricing.base_accommodation,
         },
         build: buildStamp(),
       },
