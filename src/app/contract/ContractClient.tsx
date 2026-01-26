@@ -139,6 +139,16 @@ export default function ContractClient({ booking, token, existing }: Props) {
     []
   );
 
+  // ✅ RIB FIXE (virement)
+  const BANK = useMemo(
+    () => ({
+      beneficiary: "Coralie Laurens",
+      iban: "FR76 2823 3000 0105 5571 3835 979",
+      bic: "REVOFRP2",
+    }),
+    []
+  );
+
   // ✅ Adresse du logement FIXE (comme demandé)
   const PROPERTY_ADDRESS = useMemo(() => "2542 chemin des près neufs 83570 Carcès", []);
 
@@ -417,6 +427,12 @@ Taxe de séjour : ${touristTaxText} (si applicable / selon règles locales)
 Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
 
+
+Coordonnées bancaires (RIB) :
+Bénéficiaire : ${BANK.beneficiary}
+IBAN : ${BANK.iban}
+BIC : ${BANK.bic}
+
 5.1 Acompte (30%)
 Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
@@ -537,6 +553,7 @@ ${occupantsText}
     deposit30,
     solde70,
     OWNER,
+    BANK,
     PROPERTY_ADDRESS,
     pricingNumbers.accommodation,
     pricingNumbers.cleaning,

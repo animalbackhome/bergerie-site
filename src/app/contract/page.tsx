@@ -237,8 +237,11 @@ export default async function ContractPage(props: PageProps) {
     __pickNumber(bookingRaw, ["children_count", "childrenCount", "children"], null) ?? null;
 
   const animals_count =
-    __pickNumber(bookingRaw, ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"], null) ??
-    null;
+    __pickNumber(
+      bookingRaw,
+      ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"],
+      null
+    ) ?? null;
 
   const pricingNormalized = __normalizePricing((bookingRaw as any).pricing ?? null);
 
@@ -297,7 +300,7 @@ export default async function ContractPage(props: PageProps) {
   const { data: existing } = await supabase
     .from("booking_contracts")
     .select(
-      "booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, signed_at"
+      "booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, signed_at, contract_date"
     )
     .eq("booking_request_id", rid)
     .maybeSingle();
