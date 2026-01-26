@@ -121,6 +121,37 @@ function __pickNumber(row: any, keys: string[], fallback: number | null = null):
   return fallback;
 }
 
+/**
+ * ✅ Sécurise le pricing pour le contrat (sans changer le reste)
+ * - total reste la source de vérité
+ * - options_total (fallback) = total - base_accommodation - cleaning - tourist_tax
+ * - ne supprime rien, n’invente pas d’options détaillées
+ */
+function __normalizePricing(pricing: any) {
+  if (!pricing || typeof pricing !== "object") return pricing;
+
+  const total = Number(pricing.total);
+  if (!Number.isFinite(total)) return pricing;
+
+  const base = Number(pricing.base_accommodation);
+  const cleaning = Number(pricing.cleaning);
+  const touristTax = Number(pricing.tourist_tax);
+
+  const baseN = Number.isFinite(base) ? base : 0;
+  const cleaningN = Number.isFinite(cleaning) ? cleaning : 0;
+  const touristTaxN = Number.isFinite(touristTax) ? touristTax : 0;
+
+  const optionsTotalExisting = Number(pricing.options_total);
+  if (Number.isFinite(optionsTotalExisting)) return pricing;
+
+  const options_total = Math.round((total - baseN - cleaningN - touristTaxN) * 100) / 100;
+
+  return {
+    ...pricing,
+    options_total: options_total,
+  };
+}
+
 export default async function ContractPage(props: PageProps) {
   const sp = await resolveSearchParams((props as any).searchParams);
   const rid = normalizeRid(getParam(sp, "rid"));
@@ -209,6 +240,8 @@ export default async function ContractPage(props: PageProps) {
     __pickNumber(bookingRaw, ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"], null) ??
     null;
 
+  const pricingNormalized = __normalizePricing((bookingRaw as any).pricing ?? null);
+
   // ✅ IMPORTANT: on expose rid sous plusieurs clés
   // pour que le client/API ne “perde” jamais l’id au submit.
   const booking = {
@@ -233,7 +266,7 @@ export default async function ContractPage(props: PageProps) {
     nights: nights ?? null,
 
     // pricing & metadata
-    pricing: (bookingRaw as any).pricing ?? null,
+    pricing: pricingNormalized,
     created_at: (bookingRaw as any).created_at ?? null,
   };
 

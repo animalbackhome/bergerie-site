@@ -69,10 +69,31 @@ function safeBool(v: unknown) {
   );
 }
 
+/**
+ * ✅ FIX: certains formulaires envoient les options dans un objet imbriqué (options/pricing/values/etc).
+ * On cherche donc les clés à la racine + dans quelques conteneurs fréquents.
+ * (Aucun changement d’email / HTML : on corrige juste les valeurs qui alimentent le pricing serveur.)
+ */
 function pickFirst(body: any, keys: string[]) {
+  const containers = [
+    body,
+    body?.options,
+    body?.pricing,
+    body?.prices,
+    body?.extras,
+    body?.fields,
+    body?.values,
+    body?.data,
+    body?.payload,
+    body?.booking,
+    body?.form,
+  ];
+
   for (const k of keys) {
-    const v = body?.[k];
-    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+    for (const obj of containers) {
+      const v = obj?.[k];
+      if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+    }
   }
   return undefined;
 }
@@ -517,7 +538,7 @@ export async function POST(req: Request) {
     if (nightsComputed <= 0)
       return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
 
-    // ✅ options/animaux : supporte snake_case + camelCase + variantes fréquentes
+    // ✅ options/animaux : supporte snake_case + camelCase + variantes fréquentes (y compris objets imbriqués via pickFirst)
     const animals_count = Math.max(
       0,
       pickInt(body as any, ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"], 0)
@@ -532,8 +553,14 @@ export async function POST(req: Request) {
           ? `${animals_count} (autre - ${other_animal_label})`
           : `${animals_count} (${animal_type || "—"})`;
 
-    const wood_quarters = Math.max(0, pickInt(body as any, ["wood_quarters", "woodQuarters", "wood"], 0));
-    const visitors_count = Math.max(0, pickInt(body as any, ["visitors_count", "visitorsCount", "visitors"], 0));
+    const wood_quarters = Math.max(
+      0,
+      pickInt(body as any, ["wood_quarters", "woodQuarters", "wood_quarter", "woodQuarter", "wood"], 0)
+    );
+    const visitors_count = Math.max(
+      0,
+      pickInt(body as any, ["visitors_count", "visitorsCount", "visitor_count", "visitorCount", "visitors"], 0)
+    );
     const extra_people_count = Math.max(
       0,
       pickInt(body as any, ["extra_people_count", "extraPeopleCount", "extra_people", "extraPeople"], 0)

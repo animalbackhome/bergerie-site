@@ -20,7 +20,9 @@ function mustStr(v: unknown) {
 }
 
 function __isUuid(s: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    s
+  );
 }
 
 function __isPositiveIntString(s: string) {
@@ -76,6 +78,47 @@ function todayFR(): string {
   }
 }
 
+/**
+ * ✅ Options éventuelles = somme de TOUTES les options réellement présentes dans pricing,
+ * sans inventer, et sans compter les champs "non-options" (total, taxes, base, etc.)
+ */
+function computeOptionsTotalFromPricing(pricing: any): number {
+  const p = pricing && typeof pricing === "object" ? pricing : {};
+
+  // Champs connus "non-options" à EXCLURE de la somme des options
+  const excluded = new Set<string>([
+    "total",
+    "cleaning",
+    "tourist_tax",
+    "tax",
+    "taxes",
+    "base",
+    "base_accommodation",
+    "accommodation",
+    "accommodation_total",
+    "subtotal",
+    "nights",
+    "nightly_rate",
+    "rate",
+    "adults",
+    "children",
+    "currency",
+  ]);
+
+  let sum = 0;
+
+  for (const [k, v] of Object.entries(p)) {
+    if (excluded.has(k)) continue;
+
+    const n = Number(v);
+    if (!Number.isFinite(n)) continue;
+
+    sum += n;
+  }
+
+  return round2(sum);
+}
+
 function buildFullContractText(args: {
   ownerName: string;
   ownerAddress: string;
@@ -92,7 +135,7 @@ function buildFullContractText(args: {
 
   totalN: number | null;
   accommodationN: number | null;
-  cleaningN: number;
+  cleaningN: number; // fixe: 100
   optionsN: number;
   touristTaxN: number;
   deposit30N: number | null;
@@ -101,8 +144,7 @@ function buildFullContractText(args: {
   address: string;
   occupantsText: string;
 
-  signatureCity: string;
-  signatureDate: string;
+  signatureDate: string; // date du jour générée au moment de la signature
 }) {
   const {
     ownerName,
@@ -124,7 +166,6 @@ function buildFullContractText(args: {
     soldeN,
     address,
     occupantsText,
-    signatureCity,
     signatureDate,
   } = args;
 
@@ -188,7 +229,9 @@ Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
 
 5.1 Acompte (30%)
-Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
+Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${
+    deposit30 || "[____ €]"
+  }.
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
@@ -267,7 +310,7 @@ Contrat entre particuliers. En cas de difficulté, les parties recherchent une s
 À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
 
 Signatures
-Fait à ${signatureCity || "Carcès"}, le ${signatureDate || "[date]"}.
+Fait à Carcès, le ${signatureDate || "[date]"}
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
@@ -423,41 +466,49 @@ export async function POST(req: Request) {
   // ✅ Email : contrat complet avec montants auto-remplis
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
+  const contractUrl = baseUrl
+    ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}`
+    : "";
 
   const arrivalYmd = String(booking.start_date || "").trim();
   const departureYmd = String(booking.end_date || "").trim();
 
   const p = booking?.pricing || {};
 
+  // ✅ Source de vérité : total si présent
   const totalN = pickNumber(p, ["total"]) ?? null;
-  const cleaningN = pickNumber(p, ["cleaning"]) ?? 100;
 
-  const animalsN = pickNumber(p, ["animals"]) ?? 0;
-  const woodN = pickNumber(p, ["wood"]) ?? 0;
-  const visitorsN = pickNumber(p, ["visitors"]) ?? 0;
-  const extraPeopleN = pickNumber(p, ["extra_people"]) ?? 0;
-  const earlyN = pickNumber(p, ["early_arrival"]) ?? 0;
-  const lateN = pickNumber(p, ["late_departure"]) ?? 0;
+  // ✅ Forfait ménage fixe : 100€
+  const cleaningN = 100;
 
-  const optionsN = round2(animalsN + woodN + visitorsN + extraPeopleN + earlyN + lateN);
+  // ✅ Taxe de séjour si présente
   const touristTaxN = pickNumber(p, ["tourist_tax"]) ?? 0;
 
-  let accommodationN = pickNumber(p, ["base_accommodation"]) ?? null;
+  // ✅ Options = somme de toutes les clés options présentes dans pricing (sans inventer)
+  const optionsN = computeOptionsTotalFromPricing(p);
+
+  // ✅ Hébergement : champ direct si présent, sinon déduit du total (si total présent)
+  let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
-    accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
+    accommodationN =
+      Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
   }
 
+  // ✅ Acompte / solde depuis total (si total présent)
   const deposit30N = totalN != null ? round2(totalN * 0.3) : null;
-  const soldeN = totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
+  const soldeN =
+    totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
 
-  const addressText = `${addressLine1}${addressLine2 ? `, ${addressLine2}` : ""}, ${postalCode} ${city}, ${country}`;
+  const addressText = `${addressLine1}${
+    addressLine2 ? `, ${addressLine2}` : ""
+  }, ${postalCode} ${city}, ${country}`;
 
   const occupantsText = normOccupants
     .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
     .join("\n");
 
+  // ✅ Propriétaire & adresse logement FIXES (non dynamiques)
   const ownerName = "Laurens Coralie";
   const ownerAddress = "2542 chemin des près neufs 83570 Carcès";
   const ownerEmail = "laurens-coralie@hotmail.com";
@@ -484,7 +535,7 @@ export async function POST(req: Request) {
     soldeN,
     address: addressText,
     occupantsText,
-    signatureCity: "Carcès",
+    // ✅ Date générée au moment de la signature
     signatureDate: todayFR(),
   });
 
@@ -493,14 +544,25 @@ export async function POST(req: Request) {
   const htmlOwner = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
       <h2>${escapeHtml(subjectOwner)}</h2>
-      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)} — ${escapeHtml(booking.phone || "")}</p>
-      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(formatDateFR(departureYmd))} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
-      ${totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""}
+      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(
+    booking.email
+  )} — ${escapeHtml(booking.phone || "")}</p>
+      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(
+    formatDateFR(departureYmd)
+  )} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
+      ${
+        totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""
+      }
       <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
-      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(/\n/g, "<br/>")}</p>
+      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(
+        /\n/g,
+        "<br/>"
+      )}</p>
       ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
       <hr/>
-      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
+        contractText
+      )}</pre>
     </div>
   `;
 
@@ -527,7 +589,9 @@ export async function POST(req: Request) {
         <p>Vous pouvez conserver ce message comme preuve.</p>
         ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
         <hr/>
-        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
+          contractText
+        )}</pre>
       </div>
     `,
   });
