@@ -70,12 +70,35 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
-function todayFR(): string {
-  try {
-    return new Date().toLocaleDateString("fr-FR");
-  } catch {
-    return "";
+// ✅ Date contrat (JJ/MM/AAAA) : validation stricte + date réelle (pas 31/02)
+function parseContractDateFR(
+  input: string
+): { ok: true; normalized: string } | { ok: false } {
+  const s = mustStr(input);
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (!m) return { ok: false };
+
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
+  if (yyyy < 1900 || yyyy > 2200) return { ok: false };
+  if (mm < 1 || mm > 12) return { ok: false };
+  if (dd < 1 || dd > 31) return { ok: false };
+
+  // validation calendrier réelle
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) {
+    return { ok: false };
   }
+
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(
+    2,
+    "0"
+  )}/${String(yyyy).padStart(4, "0")}`;
+
+  return { ok: true, normalized };
 }
 
 /**
@@ -144,7 +167,7 @@ function buildFullContractText(args: {
   address: string;
   occupantsText: string;
 
-  signatureDate: string; // date du jour générée au moment de la signature
+  signatureDate: string; // ✅ date SAISIE par le locataire (JJ/MM/AAAA)
 }) {
   const {
     ownerName,
@@ -369,7 +392,7 @@ export async function GET(req: Request) {
   const { data: contract, error: cErr } = await supabase
     .from("booking_contracts")
     .select(
-      "id, booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, signed_at"
+      "id, booking_request_id, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, signed_at, contract_date"
     )
     .eq("booking_request_id", rid)
     .maybeSingle();
@@ -398,6 +421,14 @@ export async function POST(req: Request) {
   const country = mustStr(body?.signer_country);
   const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
   const acceptedTerms = Boolean(body?.accepted_terms);
+
+  // ✅ NOUVEAU : date du contrat obligatoire (JJ/MM/AAAA)
+  const contractDateRaw = mustStr(body?.contract_date);
+  const parsedContractDate = parseContractDateFR(contractDateRaw);
+  if (!parsedContractDate.ok) {
+    return jsonError("Merci de renseigner la date du contrat au format JJ/MM/AAAA.", 400);
+  }
+  const contractDate = parsedContractDate.normalized;
 
   if (!addressLine1 || !postalCode || !city || !country) {
     return jsonError("Adresse incomplète.", 400);
@@ -451,13 +482,17 @@ export async function POST(req: Request) {
         signer_city: city,
         signer_country: country,
         occupants: normOccupants,
+
+        // ✅ NOUVEAU : sauvegarde en base
+        contract_date: contractDate,
+
         ip: req.headers.get("x-forwarded-for") || null,
         user_agent: req.headers.get("user-agent") || null,
       },
       { onConflict: "booking_request_id" }
     )
     .select(
-      "id, booking_request_id, signed_at, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants"
+      "id, booking_request_id, signed_at, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, contract_date"
     )
     .single();
 
@@ -491,18 +526,14 @@ export async function POST(req: Request) {
   let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
-    accommodationN =
-      Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
+    accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
   }
 
   // ✅ Acompte / solde depuis total (si total présent)
   const deposit30N = totalN != null ? round2(totalN * 0.3) : null;
-  const soldeN =
-    totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
+  const soldeN = totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
 
-  const addressText = `${addressLine1}${
-    addressLine2 ? `, ${addressLine2}` : ""
-  }, ${postalCode} ${city}, ${country}`;
+  const addressText = `${addressLine1}${addressLine2 ? `, ${addressLine2}` : ""}, ${postalCode} ${city}, ${country}`;
 
   const occupantsText = normOccupants
     .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
@@ -535,8 +566,8 @@ export async function POST(req: Request) {
     soldeN,
     address: addressText,
     occupantsText,
-    // ✅ Date générée au moment de la signature
-    signatureDate: todayFR(),
+    // ✅ Date saisie (obligatoire)
+    signatureDate: contractDate,
   });
 
   const subjectOwner = `Contrat signé — Demande #${rid}`;
