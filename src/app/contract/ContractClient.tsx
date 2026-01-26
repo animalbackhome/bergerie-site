@@ -86,6 +86,18 @@ function expectedPeopleCount(booking: Booking): number | null {
   return total > 0 ? total : null;
 }
 
+function signedDateFRFromIso(iso: string | null | undefined): string | null {
+  const s = String(iso || "").trim();
+  if (!s) return null;
+  const dt = new Date(s);
+  if (Number.isNaN(dt.getTime())) return null;
+  try {
+    return dt.toLocaleDateString("fr-FR");
+  } catch {
+    return null;
+  }
+}
+
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES (comme demandé)
   const OWNER = useMemo(
@@ -124,6 +136,9 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [signedOk, setSignedOk] = useState(false);
 
+  // ✅ date figée au moment de la signature (si on vient de signer sans reload)
+  const [signedDateLocal, setSignedDateLocal] = useState<string | null>(null);
+
   const isSigned = Boolean(existing?.signed_at) || signedOk;
 
   useEffect(() => {
@@ -153,18 +168,14 @@ export default function ContractClient({ booking, token, existing }: Props) {
   );
 
   /**
-   * ✅ PRICING : aligné sur ce que ton API stocke :
-   * pricing = {
-   *  base_accommodation, cleaning, animals, wood, visitors,
-   *  extra_people, early_arrival, late_departure, tourist_tax, total
-   * }
-   *
-   * - Hébergement = base_accommodation
-   * - Ménage = cleaning (fallback 100)
-   * - Options = somme des extras (animals+wood+visitors+extra_people+early_arrival+late_departure)
-   * - Taxe = tourist_tax
-   * - Total = total
-   * - Acompte = 30% total / Solde = 70%
+   * ✅ PRICING : conforme à la demande
+   * - Total : pricing.total si présent (source de vérité)
+   * - Hébergement : pricing.base_accommodation (ou calcul si manquant)
+   * - Ménage : fixe (fallback 100)
+   * - Options : si options_total existe => on l'utilise ; sinon on somme toutes les clés "options"
+   *   existantes dans pricing (numériques) en excluant les postes non-options.
+   * - Taxe : tourist_tax
+   * - Acompte : 30% total / Solde : total - acompte
    */
   const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
@@ -191,21 +202,56 @@ export default function ContractClient({ booking, token, existing }: Props) {
     const touristTax =
       pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
 
-    // Extras (options) : soit une clé existe, soit on additionne les champs connus
+    // ✅ options_total direct (si présent)
     const optionsDirect =
       pickNumber(p, ["options_total", "extras_total", "extras", "options", "addon_total", "add_ons_total"]) ?? null;
 
-    const animals = pickNumber(p, ["animals", "pet_fee", "pets_fee"]) ?? 0;
-    const wood = pickNumber(p, ["wood"]) ?? 0;
-    const visitors = pickNumber(p, ["visitors"]) ?? 0;
-    const extra_people = pickNumber(p, ["extra_people", "extra_people_total"]) ?? 0;
-    const early_arrival = pickNumber(p, ["early_arrival", "earlyArrival"]) ?? 0;
-    const late_departure = pickNumber(p, ["late_departure", "lateDeparture"]) ?? 0;
+    // ✅ sinon : somme de toutes les options stockées (numériques) en excluant les postes non-options
+    const optionsComputed = (() => {
+      const excluded = new Set([
+        "currency",
+        "total",
+        "total_price",
+        "grand_total",
+        "amount_total",
+        "base_accommodation",
+        "base",
+        "base_total",
+        "accommodation",
+        "accommodation_total",
+        "stay",
+        "stay_total",
+        "lodging",
+        "lodging_total",
+        "cleaning",
+        "cleaning_fee",
+        "cleaningFee",
+        "menage",
+        "tourist_tax",
+        "taxe_sejour",
+        "taxe_de_sejour",
+        "city_tax",
+        "local_tax",
+        // on exclut aussi options_total et ses alias pour éviter double comptage
+        "options_total",
+        "extras_total",
+        "extras",
+        "options",
+        "addon_total",
+        "add_ons_total",
+      ]);
 
-    const options =
-      optionsDirect != null
-        ? optionsDirect
-        : round2(animals + wood + visitors + extra_people + early_arrival + late_departure);
+      let sum = 0;
+      for (const [k, v] of Object.entries(p || {})) {
+        if (excluded.has(k)) continue;
+        const n = Number(v as any);
+        if (!Number.isFinite(n)) continue;
+        sum += n;
+      }
+      return round2(sum);
+    })();
+
+    const options = optionsDirect != null ? optionsDirect : optionsComputed;
 
     // Si accommodation manquante MAIS total présent : calcul propre
     let accommodationFixed = accommodation;
@@ -251,6 +297,18 @@ export default function ContractClient({ booking, token, existing }: Props) {
       return "";
     }
   }, []);
+
+  const signatureDateFR = useMemo(() => {
+    // ✅ priorité : date enregistrée en base (moment réel de signature)
+    const fromDb = signedDateFRFromIso(existing?.signed_at);
+    if (fromDb) return fromDb;
+
+    // ✅ sinon : si on vient de signer, on fige la date locale
+    if (signedDateLocal) return signedDateLocal;
+
+    // ✅ sinon (avant signature) : date du jour (affichage)
+    return contractTodayFR || "[date]";
+  }, [existing?.signed_at, signedDateLocal, contractTodayFR]);
 
   const contractText = useMemo(() => {
     const occupantsText = occupants
@@ -306,9 +364,8 @@ Capacité maximale : 8 personnes (voir Article 11).
 Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
 
 Annexes (faisant partie intégrante du contrat) :
-Annexe 1 : État descriptif du logement (repris du site)
-Annexe 2 : Inventaire / liste équipements (repris du site)
-Annexe 3 : Règlement intérieur (repris et signé)
+Annexe 1 : État descriptif du logement
+Annexe 2 : Inventaire / liste équipements
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
@@ -378,7 +435,7 @@ Le barbecue/plancha doivent être rendus propres. Les frais de remise en état, 
 12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)
 Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée.
 Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre :
-dégradations, pertes, casse, nettoyage anormal, non-respect du règlement intérieur.
+dégradations, pertes, casse, nettoyage anormal.
 En cas de retenue, le propriétaire pourra fournir, selon le cas, photos + devis/factures justifiant la retenue.
 
 13) Identité du locataire
@@ -402,8 +459,8 @@ Aucune caméra n’est présente à l’intérieur du logement.
 17) Assurance
 Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent). Il est conseillé de souscrire une assurance annulation.
 
-18) Utilisation paisible — Règlement intérieur
-Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
+18) Utilisation paisible
+Le locataire s’engage à une jouissance paisible des lieux.
 
 19) Cession / Sous-location
 La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
@@ -413,7 +470,7 @@ Contrat entre particuliers. En cas de difficulté, les parties recherchent une s
 À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
 
 Signatures
-Fait à Carcès, le ${contractTodayFR || "[date]"}.
+Fait à Carcès, le ${signatureDateFR}.
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
@@ -426,86 +483,11 @@ ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
 (Repris du site.)
 
-ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-(On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
-
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
 
 ✅ Structure du contrat
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide :
-A) Identification des parties
-Propriétaire (bailleur) : identité + coordonnées
-Locataire : identité + coordonnées
-Déclaration de capacité à contracter
-B) Désignation de la location
-Nature : location saisonnière meublée
-Adresse / capacité / usage (résidence de vacances)
-C) Durée — Dates — Horaires
-Dates du séjour + nombre de nuits
-Horaires conformes au site :
-arrivée 16h–18h
-départ 10h max
-options possibles : arrivée début de journée (+70€) / départ fin de journée (+70€) selon disponibilité
-D) Prix — Taxes — Prestations
-Détail du prix total
-Forfait ménage fixe : ${cleaningText}
-Taxe de séjour (si applicable) + options éventuelles
-E) Paiement (virement uniquement)
-Paiement par RIB uniquement (pas de chèque)
-Acompte 30% : qualifié explicitement comme acompte (et non arrhes)
-Solde à payer au plus tard 7 jours avant l’arrivée
-F) Réservation / engagement
-Réservation effective à réception :
-contrat signé
-acompte payé
-Le solde reste exigible selon les délais prévus
-G) Pas de droit de rétractation
-Mention spécifique à l’hébergement à date déterminée
-Renvoi clair aux conditions d’annulation
-H) Annulation / No-show / séjour écourté (protection maximale)
-Acompte : non remboursable
-Après paiement du solde (J-7) : aucun remboursement, quel que soit le motif
-No-show : entrée impossible à partir de minuit, règles de disposition du logement ensuite
-I) Annulation par le propriétaire
-Remboursement intégral des sommes versées
-Pas d’indemnité forfaitaire
-J) État des lieux / entretien / ménage
-État des lieux d’entrée + sortie signé
-Conditions ménage + remise en état si abus/dégradations
-K) Caution / dépôt de garantie
-Caution : 500€ en liquide à l’arrivée
-Restitution après état des lieux de sortie
-Retenues possibles (dégradations/pertes/ménage anormal), justificatifs possibles (photos + devis/factures si nécessaire)
-L) Vérification d’identité
-À l’arrivée : présentation d’une pièce d’identité au nom du réservant
-Aucun numéro de pièce relevé
-M) Capacité / personnes supplémentaires / visiteurs
-Max 8 personnes
-Surcoûts : 50€/pers/nuit + 50€/visiteur journée (même sans nuitée)
-Interdiction personnes non déclarées
-N) Animaux
-Acceptés sous conditions
-Supplément : 10€/chien/nuit (à régler à l’arrivée)
-O) Caméras
-Présence de caméras uniquement sur les accès extérieurs (information obligatoire)
-P) Assurance
-Responsabilité civile villégiature conseillée / exigée
-Q) Utilisation paisible + règlement intérieur
-Respect du règlement intérieur obligatoire
-Interdictions et règles détaillées
-R) Cession / sous-location
-Interdite sans accord écrit
-S) Litiges
-Recherche d’accord amiable
-Compétence selon règles de droit commun
-
-2) Annexes (très important)
-Le contrat est complété par des annexes qui font partie intégrante du dossier :
-Annexe 1 — État descriptif du logement : informations détaillées (surface, équipements, prestations), pouvant être repris automatiquement depuis le site
-Annexe 2 — Inventaire : liste équipements/objets, pouvant aussi être générée depuis la base du site
-Annexe 3 — Règlement intérieur : le règlement complet à valider avant location
-Annexe 4 — État des lieux d’entrée / sortie : document signé sur place
+Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -533,7 +515,7 @@ ${occupantsText}
     pricingNumbers.cleaning,
     pricingNumbers.options,
     pricingNumbers.touristTax,
-    contractTodayFR,
+    signatureDateFR,
   ]);
 
   const allOccupantsFilled = useMemo(() => {
@@ -613,6 +595,13 @@ ${occupantsText}
       if (!res.ok || !json?.ok) {
         setError(json?.error || "Erreur lors de la signature.");
         return;
+      }
+
+      // ✅ fige la date au moment exact où l’utilisateur signe (sans attendre un reload)
+      try {
+        setSignedDateLocal(new Date().toLocaleDateString("fr-FR"));
+      } catch {
+        setSignedDateLocal(null);
       }
 
       setSignedOk(true);
