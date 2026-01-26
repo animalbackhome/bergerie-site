@@ -101,41 +101,83 @@ function parseContractDateFR(
   return { ok: true, normalized };
 }
 
+// ✅ RIB FIXE (pop-up + emails + contrat)
+const BANK_DETAILS = {
+  beneficiary: "Coralie Laurens",
+  iban: "FR76 2823 3000 0105 5571 3835 979",
+  bic: "REVOFRP2",
+};
+
 /**
- * ✅ Options éventuelles = somme de TOUTES les options réellement présentes dans pricing,
- * sans inventer, et sans compter les champs "non-options" (total, taxes, base, etc.)
+ * ✅ Options éventuelles :
+ * - si options_total existe (ou alias) -> on l’utilise (source de vérité)
+ * - sinon : somme des champs numériques "options" existants,
+ *   en excluant les postes non-options (total, base, ménage, taxe, etc.)
  */
 function computeOptionsTotalFromPricing(pricing: any): number {
   const p = pricing && typeof pricing === "object" ? pricing : {};
 
-  // Champs connus "non-options" à EXCLURE de la somme des options
+  const direct =
+    pickNumber(p, ["options_total", "extras_total", "addon_total", "add_ons_total"]) ?? null;
+  if (direct != null) return round2(direct);
+
   const excluded = new Set<string>([
+    "currency",
+
+    // totals
     "total",
-    "cleaning",
-    "tourist_tax",
-    "tax",
-    "taxes",
-    "base",
+    "total_price",
+    "grand_total",
+    "amount_total",
+
+    // base / accommodation
     "base_accommodation",
+    "base",
+    "base_total",
     "accommodation",
     "accommodation_total",
+    "stay",
+    "stay_total",
+    "lodging",
+    "lodging_total",
+
+    // cleaning
+    "cleaning",
+    "cleaning_fee",
+    "cleaningFee",
+    "menage",
+
+    // tax
+    "tourist_tax",
+    "taxe_sejour",
+    "taxe_de_sejour",
+    "city_tax",
+    "local_tax",
+    "tax",
+    "taxes",
+
+    // other non-option metadata
     "subtotal",
     "nights",
     "nightly_rate",
     "rate",
     "adults",
     "children",
-    "currency",
+
+    // avoid double count if present
+    "options_total",
+    "extras_total",
+    "addon_total",
+    "add_ons_total",
+    "extras",
+    "options",
   ]);
 
   let sum = 0;
-
   for (const [k, v] of Object.entries(p)) {
     if (excluded.has(k)) continue;
-
     const n = Number(v);
     if (!Number.isFinite(n)) continue;
-
     sum += n;
   }
 
@@ -168,6 +210,10 @@ function buildFullContractText(args: {
   occupantsText: string;
 
   signatureDate: string; // ✅ date SAISIE par le locataire (JJ/MM/AAAA)
+
+  bankBeneficiary: string;
+  bankIban: string;
+  bankBic: string;
 }) {
   const {
     ownerName,
@@ -190,6 +236,9 @@ function buildFullContractText(args: {
     address,
     occupantsText,
     signatureDate,
+    bankBeneficiary,
+    bankIban,
+    bankBic,
   } = args;
 
   const nights = nightsBetween(arrivalYmd, departureYmd);
@@ -251,10 +300,13 @@ Taxe de séjour : ${touristTax || "[____ €]"} (si applicable / selon règles l
 Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
 
+RIB (virement bancaire)
+Bénéficiaire : ${bankBeneficiary}
+IBAN : ${bankIban}
+BIC : ${bankBic}
+
 5.1 Acompte (30%)
-Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${
-    deposit30 || "[____ €]"
-  }.
+Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
@@ -288,7 +340,7 @@ En cas d’annulation par le propriétaire (hors force majeure), celui-ci rembou
 Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
@@ -501,9 +553,7 @@ export async function POST(req: Request) {
   // ✅ Email : contrat complet avec montants auto-remplis
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl
-    ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}`
-    : "";
+  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
 
   const arrivalYmd = String(booking.start_date || "").trim();
   const departureYmd = String(booking.end_date || "").trim();
@@ -511,19 +561,32 @@ export async function POST(req: Request) {
   const p = booking?.pricing || {};
 
   // ✅ Source de vérité : total si présent
-  const totalN = pickNumber(p, ["total"]) ?? null;
+  const totalN = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
 
   // ✅ Forfait ménage fixe : 100€
   const cleaningN = 100;
 
   // ✅ Taxe de séjour si présente
-  const touristTaxN = pickNumber(p, ["tourist_tax"]) ?? 0;
+  const touristTaxN =
+    pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
 
-  // ✅ Options = somme de toutes les clés options présentes dans pricing (sans inventer)
+  // ✅ Options : conforme à la règle anti-double comptage
   const optionsN = computeOptionsTotalFromPricing(p);
 
   // ✅ Hébergement : champ direct si présent, sinon déduit du total (si total présent)
-  let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
+  let accommodationN =
+    pickNumber(p, [
+      "base_accommodation",
+      "base",
+      "base_total",
+      "accommodation",
+      "accommodation_total",
+      "stay",
+      "stay_total",
+      "lodging",
+      "lodging_total",
+    ]) ?? null;
+
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
     accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
@@ -568,32 +631,36 @@ export async function POST(req: Request) {
     occupantsText,
     // ✅ Date saisie (obligatoire)
     signatureDate: contractDate,
+
+    // ✅ RIB FIXE
+    bankBeneficiary: BANK_DETAILS.beneficiary,
+    bankIban: BANK_DETAILS.iban,
+    bankBic: BANK_DETAILS.bic,
   });
 
   const subjectOwner = `Contrat signé — Demande #${rid}`;
 
+  const bankHtml = `
+    <div style="margin:12px 0;padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb">
+      <div style="font-weight:700;margin-bottom:6px">RIB (virement bancaire)</div>
+      <div><b>Bénéficiaire :</b> ${escapeHtml(BANK_DETAILS.beneficiary)}</div>
+      <div><b>IBAN :</b> ${escapeHtml(BANK_DETAILS.iban)}</div>
+      <div><b>BIC :</b> ${escapeHtml(BANK_DETAILS.bic)}</div>
+    </div>
+  `;
+
   const htmlOwner = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
       <h2>${escapeHtml(subjectOwner)}</h2>
-      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(
-    booking.email
-  )} — ${escapeHtml(booking.phone || "")}</p>
-      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(
-    formatDateFR(departureYmd)
-  )} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
-      ${
-        totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""
-      }
+      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)} — ${escapeHtml(booking.phone || "")}</p>
+      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(formatDateFR(departureYmd))} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
+      ${totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""}
       <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
-      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(
-        /\n/g,
-        "<br/>"
-      )}</p>
+      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(/\n/g, "<br/>")}</p>
+      ${bankHtml}
       ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
       <hr/>
-      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
-        contractText
-      )}</pre>
+      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
     </div>
   `;
 
@@ -618,11 +685,11 @@ export async function POST(req: Request) {
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
         <h2>Merci ! Votre contrat est signé ✅</h2>
         <p>Vous pouvez conserver ce message comme preuve.</p>
+        ${bankHtml}
         ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
         <hr/>
-        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
-          contractText
-        )}</pre>
+        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+        <p style="margin-top:16px">Très cordialement<br/>Laurens Coralie</p>
       </div>
     `,
   });
@@ -635,6 +702,6 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
