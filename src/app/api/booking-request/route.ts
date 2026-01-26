@@ -69,31 +69,10 @@ function safeBool(v: unknown) {
   );
 }
 
-/**
- * ✅ FIX: certains formulaires envoient les options dans un objet imbriqué (options/pricing/values/etc).
- * On cherche donc les clés à la racine + dans quelques conteneurs fréquents.
- * (Aucun changement d’email / HTML : on corrige juste les valeurs qui alimentent le pricing serveur.)
- */
 function pickFirst(body: any, keys: string[]) {
-  const containers = [
-    body,
-    body?.options,
-    body?.pricing,
-    body?.prices,
-    body?.extras,
-    body?.fields,
-    body?.values,
-    body?.data,
-    body?.payload,
-    body?.booking,
-    body?.form,
-  ];
-
   for (const k of keys) {
-    for (const obj of containers) {
-      const v = obj?.[k];
-      if (v !== undefined && v !== null && String(v).trim() !== "") return v;
-    }
+    const v = body?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
   }
   return undefined;
 }
@@ -104,6 +83,33 @@ function pickInt(body: any, keys: string[], fallback = 0) {
 
 function pickBool(body: any, keys: string[]) {
   return safeBool(pickFirst(body, keys));
+}
+
+// ✅ Nouveau: lecture robuste des champs quand le formulaire envoie des objets imbriqués
+// (ex: animals: { count: 2, type: "chien" }, options: { late_departure: true }, etc.)
+function getDeep(body: any, path: (string | number)[]) {
+  let cur: any = body;
+  for (const p of path) {
+    if (cur == null) return undefined;
+    cur = cur?.[p as any];
+  }
+  return cur;
+}
+
+function pickFirstDeep(body: any, paths: (string | number)[][]) {
+  for (const path of paths) {
+    const v = getDeep(body, path);
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return undefined;
+}
+
+function pickIntDeep(body: any, paths: (string | number)[][], fallback = 0) {
+  return safeInt(pickFirstDeep(body, paths), fallback);
+}
+
+function pickBoolDeep(body: any, paths: (string | number)[][]) {
+  return safeBool(pickFirstDeep(body, paths));
 }
 
 function isValidEmail(email: string) {
@@ -538,13 +544,43 @@ export async function POST(req: Request) {
     if (nightsComputed <= 0)
       return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
 
-    // ✅ options/animaux : supporte snake_case + camelCase + variantes fréquentes (y compris objets imbriqués via pickFirst)
+    // ✅ options/animaux : ULTRA robustes (snake_case + camelCase + objets imbriqués)
     const animals_count = Math.max(
       0,
-      pickInt(body as any, ["animals_count", "animalsCount", "animals", "pets", "pets_count", "petsCount"], 0)
+      pickIntDeep(body as any, [
+        ["animals_count"],
+        ["animalsCount"],
+        ["animals"],
+        ["pets"],
+        ["pets_count"],
+        ["petsCount"],
+        ["animals", "count"],
+        ["animals", "qty"],
+        ["animals", "number"],
+        ["pets", "count"],
+        ["pets", "qty"],
+        ["options", "animals_count"],
+        ["options", "animalsCount"],
+      ], 0)
     );
-    const animal_type = safeStr((body as any).animal_type ?? (body as any).animalType ?? "");
-    const other_animal_label = safeStr((body as any).other_animal_label ?? (body as any).otherAnimalLabel ?? "");
+
+    const animal_type = safeStr(
+      (body as any).animal_type ??
+        (body as any).animalType ??
+        getDeep(body as any, ["animals", "type"]) ??
+        getDeep(body as any, ["pets", "type"]) ??
+        ""
+    );
+
+    const other_animal_label = safeStr(
+      (body as any).other_animal_label ??
+        (body as any).otherAnimalLabel ??
+        getDeep(body as any, ["animals", "other_label"]) ??
+        getDeep(body as any, ["animals", "otherLabel"]) ??
+        getDeep(body as any, ["pets", "other_label"]) ??
+        getDeep(body as any, ["pets", "otherLabel"]) ??
+        ""
+    );
 
     const animalsSummary =
       animals_count <= 0
@@ -555,23 +591,78 @@ export async function POST(req: Request) {
 
     const wood_quarters = Math.max(
       0,
-      pickInt(body as any, ["wood_quarters", "woodQuarters", "wood_quarter", "woodQuarter", "wood"], 0)
-    );
-    const visitors_count = Math.max(
-      0,
-      pickInt(body as any, ["visitors_count", "visitorsCount", "visitor_count", "visitorCount", "visitors"], 0)
-    );
-    const extra_people_count = Math.max(
-      0,
-      pickInt(body as any, ["extra_people_count", "extraPeopleCount", "extra_people", "extraPeople"], 0)
-    );
-    const extra_people_nights = Math.max(
-      0,
-      pickInt(body as any, ["extra_people_nights", "extraPeopleNights", "extra_people_night", "extraPeopleNight"], 0)
+      pickIntDeep(body as any, [
+        ["wood_quarters"],
+        ["woodQuarters"],
+        ["wood"],
+        ["wood", "quarters"],
+        ["wood", "qty"],
+        ["wood", "count"],
+        ["options", "wood_quarters"],
+        ["options", "woodQuarters"],
+      ], 0)
     );
 
-    const early_arrival = pickBool(body as any, ["early_arrival", "earlyArrival", "early_checkin", "earlyCheckin"]);
-    const late_departure = pickBool(body as any, ["late_departure", "lateDeparture", "late_checkout", "lateCheckout"]);
+    const visitors_count = Math.max(
+      0,
+      pickIntDeep(body as any, [
+        ["visitors_count"],
+        ["visitorsCount"],
+        ["visitors"],
+        ["visitors", "count"],
+        ["visitors", "qty"],
+        ["options", "visitors_count"],
+        ["options", "visitorsCount"],
+      ], 0)
+    );
+
+    const extra_people_count = Math.max(
+      0,
+      pickIntDeep(body as any, [
+        ["extra_people_count"],
+        ["extraPeopleCount"],
+        ["extra_people"],
+        ["extraPeople"],
+        ["extra_people", "count"],
+        ["extra_people", "qty"],
+        ["extraPeople", "count"],
+        ["options", "extra_people_count"],
+        ["options", "extraPeopleCount"],
+      ], 0)
+    );
+
+    const extra_people_nights = Math.max(
+      0,
+      pickIntDeep(body as any, [
+        ["extra_people_nights"],
+        ["extraPeopleNights"],
+        ["extra_people_night"],
+        ["extraPeopleNight"],
+        ["extra_people", "nights"],
+        ["extra_people", "night_count"],
+        ["extraPeople", "nights"],
+        ["options", "extra_people_nights"],
+        ["options", "extraPeopleNights"],
+      ], 0)
+    );
+
+    const early_arrival = pickBoolDeep(body as any, [
+      ["early_arrival"],
+      ["earlyArrival"],
+      ["early_checkin"],
+      ["earlyCheckin"],
+      ["options", "early_arrival"],
+      ["options", "earlyArrival"],
+    ]);
+
+    const late_departure = pickBoolDeep(body as any, [
+      ["late_departure"],
+      ["lateDeparture"],
+      ["late_checkout"],
+      ["lateCheckout"],
+      ["options", "late_departure"],
+      ["options", "lateDeparture"],
+    ]);
 
     const pricing = computePricing({
       nights: nightsComputed,
