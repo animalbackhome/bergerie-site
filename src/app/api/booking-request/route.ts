@@ -797,7 +797,31 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(
-      { ok: true, id },
+      {
+        ok: true,
+        id,
+        // ✅ DEBUG immédiat côté navigateur (DevTools > Network > Response)
+        pricing,
+        received: {
+          start_date,
+          end_date,
+          nights: nightsComputed,
+          adults,
+          children,
+          animals_count,
+          animal_type: animal_type || null,
+          other_animal_label: other_animal_label || null,
+          wood_quarters,
+          visitors_count,
+          extra_people_count,
+          extra_people_nights,
+          early_arrival,
+          late_departure,
+          baseAccommodation_seasonal: seasonalAccommodation.base,
+          seasonalNightly: seasonalAccommodation.nightly,
+        },
+        build: buildStamp(),
+      },
       { status: 200, headers: { "Cache-Control": "no-store, max-age=0" } }
     );
   } catch (e: any) {
