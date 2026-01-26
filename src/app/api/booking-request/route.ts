@@ -269,9 +269,68 @@ type BookingRequestBody = {
 
 /* ------------------ Pricing (verrouillé) ------------------ */
 
+// --- Tarifs saisonniers (doivent matcher le formulaire ContactSection) ---
+// NB: on calcule côté serveur à partir des dates pour que l'email = le formulaire,
+// sans jamais faire confiance au total envoyé par le client.
+
+function dateKeyMMDDUTC(date: Date) {
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${mm}-${dd}`;
+}
+
+function nightlyRateUTC(date: Date) {
+  const holidayRates: Record<string, number> = {
+    "12-24": 200,
+    "12-25": 300,
+    "12-26": 200,
+    "12-31": 200,
+    "01-01": 300,
+    "01-02": 200,
+  };
+
+  const key = dateKeyMMDDUTC(date);
+  if (holidayRates[key] != null) return holidayRates[key];
+
+  const month = date.getUTCMonth() + 1;
+
+  if (month === 8) return 500;
+  if (month === 7) return 450;
+  if (month === 6) return 400;
+  if (month === 5) return 300;
+  if (month === 4) return 250;
+  if (month === 9) return 250;
+
+  if (month === 10 || month === 11 || month === 12 || month === 1 || month === 2 || month === 3) return 170;
+
+  return 250;
+}
+
+function calcSeasonalBaseAccommodation(checkinYmd: string, nights: number) {
+  const start = parseYmd(checkinYmd);
+  if (!start || nights <= 0) return { base: 0, nightly: [] as { date: string; rate: number }[] };
+
+  const nightly: { date: string; rate: number }[] = [];
+  let total = 0;
+
+  for (let i = 0; i < nights; i++) {
+    const d = new Date(start.getTime());
+    d.setUTCDate(d.getUTCDate() + i);
+    const rate = nightlyRateUTC(d);
+    nightly.push({ date: d.toISOString().slice(0, 10), rate });
+    total += rate;
+  }
+
+  return { base: Math.round(total * 100) / 100, nightly };
+}
+
 function computePricing(args: {
   nights: number;
   adults: number;
+
+  // ✅ Base hébergement calculée côté serveur à partir des dates (tarifs saisonniers)
+  baseAccommodation: number;
+
   animalsCount: number;
   woodQuarters: number;
   visitorsCount: number;
@@ -283,15 +342,7 @@ function computePricing(args: {
   const nights = Math.max(0, safeInt(args.nights, 0));
   const adults = Math.max(0, safeInt(args.adults, 0));
 
-  // Anti-triche : base uniquement depuis env serveur.
-  if (BOOKING_BASE_PRICE_PER_NIGHT == null) {
-    // On préfère bloquer plutôt que de calculer un total faux / manipulable.
-    throw new Error(
-      "Configuration manquante : BOOKING_BASE_PRICE_PER_NIGHT. Ajoute-la dans Vercel > Environment Variables puis redeploy."
-    );
-  }
-
-  const base = Math.round(BOOKING_BASE_PRICE_PER_NIGHT * nights * 100) / 100;
+  const base = Math.round((Number(args.baseAccommodation) || 0) * 100) / 100;
 
   const cleaning = Math.round((BOOKING_CLEANING_FEE_FIXED ?? 100) * 100) / 100;
 
@@ -568,6 +619,9 @@ export async function POST(req: Request) {
     if (nightsComputed <= 0)
       return jsonError("Nombre de nuits invalide (date de départ doit être après la date d’arrivée).", 400);
 
+    // ✅ Base hébergement (tarifs saisonniers) — doit matcher le formulaire
+    const seasonalAccommodation = calcSeasonalBaseAccommodation(start_date, nightsComputed);
+
     // ✅ options/animaux : supporte snake_case + camelCase + variantes fréquentes (y compris objets imbriqués via pickFirst)
     const animals_count = Math.max(
       0,
@@ -632,6 +686,7 @@ export async function POST(req: Request) {
     const pricing = computePricing({
       nights: nightsComputed,
       adults,
+      baseAccommodation: seasonalAccommodation.base,
       animalsCount: animals_count,
       woodQuarters: wood_quarters,
       visitorsCount: visitors_count,
@@ -739,6 +794,8 @@ export async function POST(req: Request) {
         start_date,
         end_date,
         nights: nightsComputed,
+        baseAccommodation_seasonal: seasonalAccommodation.base,
+        seasonalNightly: seasonalAccommodation.nightly,
         adults,
         children,
         animals_count,
