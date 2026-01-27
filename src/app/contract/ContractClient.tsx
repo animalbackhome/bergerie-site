@@ -366,6 +366,7 @@ Le logement est loué à titre de résidence de vacances. Le locataire ne pourra
 Annexes (faisant partie intégrante du contrat) :
 Annexe 1 : État descriptif du logement
 Annexe 2 : Inventaire / liste équipements
+Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
@@ -481,6 +482,9 @@ ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
 (Repris du site.)
 
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
+(Repris du site.)
+
+ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
 (Repris du site.)
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
