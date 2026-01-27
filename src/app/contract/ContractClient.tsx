@@ -30,6 +30,9 @@ type ExistingContract = {
   signer_country: string;
   occupants: Occupant[];
   signed_at?: string | null;
+
+  // ✅ si déjà signé / enregistré
+  contract_date?: string | null; // JJ/MM/AAAA
 } | null;
 
 type Props = {
@@ -98,8 +101,61 @@ function signedDateFRFromIso(iso: string | null | undefined): string | null {
   }
 }
 
+// ✅ Date contrat : accepte "JJ/MM/AAAA" OU "JJMMAAAA" (utile sur mobile iOS)
+function parseContractDateFR(
+  input: string
+): { ok: true; normalized: string } | { ok: false } {
+  const s = String(input || "").trim();
+
+  let dd: number;
+  let mm: number;
+  let yyyy: number;
+
+  // 1) format avec /
+  const m1 = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (m1) {
+    dd = Number(m1[1]);
+    mm = Number(m1[2]);
+    yyyy = Number(m1[3]);
+  } else {
+    // 2) format compact "JJMMAAAA" (on ignore tous les non-chiffres)
+    const digitsOnly = s.replace(/\D/g, "");
+    const m2 = /^(\d{8})$/.exec(digitsOnly);
+    if (!m2) return { ok: false };
+    const digits = m2[1];
+    dd = Number(digits.slice(0, 2));
+    mm = Number(digits.slice(2, 4));
+    yyyy = Number(digits.slice(4, 8));
+  }
+
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
+  if (yyyy < 1900 || yyyy > 2200) return { ok: false };
+  if (mm < 1 || mm > 12) return { ok: false };
+  if (dd < 1 || dd > 31) return { ok: false };
+
+  // validation calendrier réelle
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) {
+    return { ok: false };
+  }
+
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(4, "0")}`;
+  return { ok: true, normalized };
+}
+
+// ✅ Auto-format mobile : l'utilisateur peut taper "27012026" et on affiche "27/01/2026"
+function formatContractDateWhileTyping(value: string): string {
+  const digits = String(value || "")
+    .replace(/\D/g, "")
+    .slice(0, 8);
+
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
 export default function ContractClient({ booking, token, existing }: Props) {
-  // ✅ Coordonnées propriétaire FIXES (comme demandé)
+  // ✅ Coordonnées propriétaire FIXES
   const OWNER = useMemo(
     () => ({
       name: "Laurens Coralie",
@@ -110,7 +166,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
     []
   );
 
-  // ✅ Adresse du logement FIXE (comme demandé)
+  // ✅ Adresse du logement FIXE
   const PROPERTY_ADDRESS = useMemo(() => "2542 chemin des près neufs 83570 Carcès", []);
 
   const expectedCount = useMemo(() => expectedPeopleCount(booking), [booking]);
@@ -127,6 +183,9 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [postalCode, setPostalCode] = useState(existing?.signer_postal_code || "");
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
+
+  // ✅ date du contrat (obligatoire, saisie manuelle, JJ/MM/AAAA) — auto-format si clavier numeric
+  const [contractDate, setContractDate] = useState<string>(existing?.contract_date || "");
 
   const [occupants, setOccupants] = useState<Occupant[]>([]);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -168,23 +227,20 @@ export default function ContractClient({ booking, token, existing }: Props) {
   );
 
   /**
-   * ✅ PRICING : conforme à la demande
+   * ✅ PRICING
    * - Total : pricing.total si présent (source de vérité)
    * - Hébergement : pricing.base_accommodation (ou calcul si manquant)
    * - Ménage : fixe (fallback 100)
-   * - Options : si options_total existe => on l'utilise ; sinon on somme toutes les clés "options"
-   *   existantes dans pricing (numériques) en excluant les postes non-options.
+   * - Options : si options_total existe => on l'utilise ; sinon on somme toutes les clés numériques
    * - Taxe : tourist_tax
    * - Acompte : 30% total / Solde : total - acompte
    */
   const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
 
-    const total =
-      pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+    const total = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
 
-    const cleaning =
-      pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
+    const cleaning = pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
 
     const accommodation =
       pickNumber(p, [
@@ -232,7 +288,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
         "taxe_de_sejour",
         "city_tax",
         "local_tax",
-        // on exclut aussi options_total et ses alias pour éviter double comptage
         "options_total",
         "extras_total",
         "extras",
@@ -260,19 +315,10 @@ export default function ContractClient({ booking, token, existing }: Props) {
       accommodationFixed = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
     }
 
-    // acompte 30% / solde 70%
     const deposit30 = total != null ? round2(total * 0.3) : null;
     const solde = total != null && deposit30 != null ? round2(total - deposit30) : null;
 
-    return {
-      total,
-      accommodation: accommodationFixed,
-      cleaning,
-      options,
-      touristTax,
-      deposit30,
-      solde,
-    };
+    return { total, accommodation: accommodationFixed, cleaning, options, touristTax, deposit30, solde };
   }, [booking.pricing]);
 
   const priceTotal = useMemo(
@@ -290,25 +336,18 @@ export default function ContractClient({ booking, token, existing }: Props) {
     [pricingNumbers.solde]
   );
 
-  const contractTodayFR = useMemo(() => {
-    try {
-      return new Date().toLocaleDateString("fr-FR");
-    } catch {
-      return "";
-    }
-  }, []);
-
+  // ✅ Affichage dans "Fait à Carcès, le …" :
+  // - si contrat déjà signé => date enregistrée (existing.contract_date)
+  // - sinon => date saisie par l’utilisateur (contractDate)
   const signatureDateFR = useMemo(() => {
-    // ✅ priorité : date enregistrée en base (moment réel de signature)
-    const fromDb = signedDateFRFromIso(existing?.signed_at);
+    const fromDb = String(existing?.contract_date || "").trim();
     if (fromDb) return fromDb;
 
-    // ✅ sinon : si on vient de signer, on fige la date locale
-    if (signedDateLocal) return signedDateLocal;
+    const typed = String(contractDate || "").trim();
+    if (typed) return typed;
 
-    // ✅ sinon (avant signature) : date du jour (affichage)
-    return contractTodayFR || "[date]";
-  }, [existing?.signed_at, signedDateLocal, contractTodayFR]);
+    return "[date]";
+  }, [existing?.contract_date, contractDate]);
 
   const contractText = useMemo(() => {
     const occupantsText = occupants
@@ -331,14 +370,407 @@ export default function ContractClient({ booking, token, existing }: Props) {
     const accommodationText =
       pricingNumbers.accommodation != null ? toMoneyEUR(pricingNumbers.accommodation) : "[____ €]";
 
-    const cleaningText =
-      pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
+    const cleaningText = pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
 
-    const optionsText =
-      pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
+    const optionsText = pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
 
-    const touristTaxText =
-      pricingNumbers.touristTax != null ? toMoneyEUR(pricingNumbers.touristTax) : "[____ €]";
+    const touristTaxText = pricingNumbers.touristTax != null ? toMoneyEUR(pricingNumbers.touristTax) : "[____ €]";
+
+    // ✅ ANNEXES : INTÉGRALEMENT COLLÉES DANS LE CONTRAT (1,2,3)
+    const annexe1 = `ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT : En résumé
+À lire avant réservation
+
+Bergerie provençale en pleine nature, grand confort, piscine au sel, accès rapide lac/cascades, et espaces pensés pour les familles comme pour les séjours entre amis.
+
+🌿
+Cadre & localisation
+8 points • Cliquez pour réduire
+
+˅
+🌿
+Bergerie provençale en pierres nichée en pleine forêt, pour un séjour au calme absolu dans le Var.
+
+📍
+À Carcès (Provence), à 10 minutes du village et de ses commerces (restaurants, pharmacie, supermarché...).
+
+🏞️
+À environ 5 minutes à pied du lac de Carcès, des cascades et de la rivière, idéal pour les amoureux de plein air.
+
+💧
+Proche des cascades du Caramy : baignades nature, balades, fraîcheur en été et paysages superbes.
+
+🌳
+Terrain arboré de 3 750 m² : pins, chênes, oliviers et essences provençales, sans vis-à-vis.
+
+✨
+Nuits incroyables : ciel étoilé, silence, ambiance “seul au monde” au cœur de la nature.
+
+🦌
+Rencontres possibles : biches, chevreuils, renards (la forêt méditerranéenne est tout autour).
+
+🚗
+Accès par piste forestière : arrivée dépaysante, immersion totale dès les premières minutes.
+
+Réduire
+
+🏡
+Le logement
+8 points • Cliquez pour réduire
+
+˅
+👨‍👩‍👧‍👦
+Une villa spacieuse et conviviale (215 m²) pensée pour partager des moments en famille ou entre amis.
+
+🍽️
+Cuisine équipée avec bar ouverte sur une terrasse d’environ 40 m², côté piscine et forêt.
+
+🌤️
+Grande véranda lumineuse avec grandes tables, parfaite pour les repas “dedans-dehors”.
+
+🔥
+Salon cosy avec poêle à bois, TV et coin bar (ambiance chaleureuse le soir).
+
+🛏️
+Chambre XXL (≈35 m²) avec deux lits doubles, dressing, décoration apaisante.
+
+🧸
+Chambre familiale avec lit double, lit bébé, jeux, livres, espace enfant (pratique et rassurant).
+
+🚿
+Salle de bains avec grande douche à l’italienne, double vasque, rangements, serviettes fournies.
+
+🚻
+WC séparé avec lave-mains pour plus de confort.
+
+Réduire
+
+🛌
+Suite indépendante
+2 points • Cliquez pour dérouler
+
+˅
+🛌
+Suite indépendante (≈35 m²) avec accès direct piscine : lit king-size, douche à l’italienne, WC, petit frigo.
+
+⚽
+Baby-foot à disposition dans la suite (bonus très apprécié).
+
+🏝️
+Extérieurs & équipements
+8 points • Cliquez pour réduire
+
+˅
+🌀
+Piscine au sel (Diffazur) : transats, bouées et jeux, pour des journées 100% détente.
+
+🎾
+Terrain de badminton.
+
+🏀
+Panier de basket.
+
+🎯
+Terrain de boules pour l’esprit “vacances en Provence”.
+
+🛝
+Jeux pour enfants.
+
+🌴
+Espace repas ombragé sous un grand arbre, idéal pour les déjeuners d’été.
+
+🚗
+Grand parking gratuit + abri voiture sur la propriété.
+
+🥾
+Départ de balades direct : forêt, lac, cascades, randonnées accessibles rapidement.
+
+Réduire
+
+🌟
+Petite touche unique
+1 point • Cliquez pour dérouler
+
+˅
+🧑‍🌾
+Maison de gardien à env. 50 m : présence rassurante et aide possible en cas de besoin.`;
+
+    const annexe2 = `ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS : Ce que propose ce logement
+Les équipements listés ci-dessous sont disponibles sur place (selon l’organisation du logement).
+
+Réduire
+Rechercher un équipement (ex : lave-vaisselle, lit bébé, Wi-Fi…)…
+🔎
+Astuce : tape un mot-clé pour filtrer instantanément.
+🛁
+Salle de bain
+8 éléments
+
+Inclus
+💨
+2 sèche-cheveux
+🚿
+2 douches à l’italienne
+🧺
+Machine à laver
+🧼
+Produits de nettoyage
+🧴
+Shampooing
+🫧
+Savon pour le corps
+🫧
+Gel douche
+🔥
+Eau chaude
+🛏️
+Chambre et linge
+15 éléments
+
+Inclus
+✅
+Équipements de base
+Serviettes, draps, savon et papier toilette
+🧳
+Grand dressing
+🧥
+Cintres
+🧻
+Draps
+🛌
+Couettes
+🛌
+Couvertures supplémentaires
+🛏️
+4 oreillers par lit
+🛏️
+Traversins
+🛋️
+Tables de nuit
+💡
+Lampes de chevet
+🪟
+Stores
+🧲
+Fer à repasser
+🧵
+Étendoir à linge
+🦟
+Moustiquaire
+🧳
+Espace de rangement vêtements
+Dressing, placard et armoire
+🎬
+Divertissement
+11 éléments
+
+Inclus
+🛰️
+Connexion maxi vitesse par satellite via Starlink
+📺
+Télévision (chaînes + Netflix + jeux vidéos)
+📚
+Livres & de quoi lire
+🧩
+Jeux extérieurs / intérieurs pour enfants
+🎯
+Terrain de boules
+💦
+Jeux aquatiques
+🏸
+Terrain de badminton
+🏀
+Panier de basket
+🏊
+Piscine
+🥾
+Randonnées : lac, rivière, cascades, canal, forêt
+🃏
+Jeux pour adultes : jeux de société, cartes, etc.
+👨‍👩‍👧‍👦
+Famille
+10 éléments
+
+Inclus
+👶
+Lit pour bébé
+Toujours dans le logement • Standard (1,3 m x 70 cm) • draps fournis
+🧸
+Lit parapluie
+Toujours dans le logement • draps fournis
+🧩
+Livres & jouets pour enfants
+🪑
+Chaise haute
+🛡️
+Pare-feu pour le poêle
+🧸
+Salle de jeux pour enfants
+Une salle avec des jouets, des livres et des jeux
+🛝
+Aire de jeux extérieure
+Structures de jeux pour enfants
+🚨
+Alarme de sécurité pour piscine
+💦
+Jeux aquatiques
+🐟
+Petit bassin avec carpes et grenouilles
+🔥
+Chauffage et climatisation
+3 éléments
+
+Inclus
+🔥
+Poêle à bois (en option)
+🌀
+Ventilateurs portables
+🌡️
+Chauffage central
+🧯
+Sécurité à la maison
+5 éléments
+
+Inclus
+🚨
+Détecteur de fumée
+⚠️
+Détecteur de monoxyde de carbone
+🧯
+Extincteur
+🩹
+Kit de premiers secours
+🧯
+Bâches anti-feu
+🍽️
+Cuisine et salle à manger
+18 éléments
+
+Inclus
+🍳
+Cuisine
+Espace où les voyageurs peuvent cuisiner
+🧊
+Réfrigérateur
+📡
+Four à micro-ondes
+🧊
+Mini réfrigérateur (dans la chambre VIP)
+❄️
+Congélateur
+🧼
+Lave-vaisselle
+🔥
+Cuisinière
+♨️
+Four
+🫖
+Bouilloire électrique
+☕
+Cafetière
+☕
+Café
+🍷
+Verres à vin
+🍞
+Grille-pain
+🍳
+Plaque de cuisson
+🧂
+Équipements de cuisine de base
+Casseroles & poêles, huile, sel et poivre
+🍽️
+Vaisselle & couverts
+Bols, assiettes, tasses, etc.
+🍖
+Ustensiles de barbecue
+Charbon, brochettes, etc.
+🪑
+Table à manger
+📍
+Caractéristiques de l’emplacement
+3 éléments
+
+Inclus
+🌊
+Accès au lac, rivière, cascades, canal, forêt
+Accès à pied via sentier / quai
+🚪
+Entrée privée par piste en terre
+Arrivée par une piste en terre
+🧺
+Laverie automatique à proximité (Intermarché)
+🌿
+Extérieur
+6 éléments
+
+Inclus
+🌤️
+Patio ou balcon
+🌱
+Arrière-cour
+Espace ouvert généralement recouvert d’herbe
+🪑
+Mobilier d’extérieur
+🍽️
+Espace repas en plein air
+🔥
+Barbecue
+Électrique
+🧘
+Chaises longues
+🚗
+Parking et installations
+2 éléments
+
+Inclus
+🅿️
+Parking gratuit sur place
+🏊
+Piscine privée
+🧾
+Services
+4 éléments
+
+Inclus
+🐾
+Animaux acceptés avec supplément
+🚭
+Logement non fumeur
+📅
+Séjours longue durée autorisés
+28 jours ou plus
+🔑
+Clés remises par l’hôte.`;
+
+    const annexe3 = `ANNEXE 3 — RÈGLEMENT INTÉRIEUR : Informations importantes à lire avant signature du contrat
+(merci de lire attentivement et de valider ces points)
+Ce sera un plaisir de vous accueillir 😀
+▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
+▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
+⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
+‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
+🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
+🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
+🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
+❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
+🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
+❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
+🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
+🚮 Poubelles : à emporter à votre départ
+🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
+✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
+📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
+🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
+❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
+🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
+🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
+🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
+✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
+🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
+🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
+🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
+📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
+📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`;
 
     return `CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —
 
@@ -370,9 +802,7 @@ Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
-Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(
-      booking.departure_date
-    )} pour ${nights} nuits.
+Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(booking.departure_date)} pour ${nights} nuits.
 Horaires standard
 Arrivée (check-in) : entre 16h et 18h
 Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
@@ -478,20 +908,14 @@ Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
-ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
-(Repris du site.)
+${annexe1}
 
-ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-(Repris du site.)
+${annexe2}
 
-ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-(Repris du site.)
+${annexe3}
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
-
-✅ Structure du contrat
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -556,6 +980,13 @@ ${occupantsText}
       return;
     }
 
+    // ✅ date de contrat obligatoire (saisie manuelle)
+    const parsed = parseContractDateFR(contractDate);
+    if (!parsed.ok) {
+      setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).");
+      return;
+    }
+
     if (!acceptedTerms) {
       setError("Vous devez accepter le contrat.");
       return;
@@ -591,6 +1022,9 @@ ${occupantsText}
           signer_country: country,
           occupants,
           accepted_terms: true,
+
+          // ✅ date saisie, normalisée JJ/MM/AAAA
+          contract_date: parsed.normalized,
         }),
       });
 
@@ -607,6 +1041,9 @@ ${occupantsText}
       } catch {
         setSignedDateLocal(null);
       }
+
+      // ✅ fige aussi la date de contrat côté UI
+      setContractDate(parsed.normalized);
 
       setSignedOk(true);
       setOkMsg("Contrat signé ✅ Un email de confirmation a été envoyé.");
@@ -711,6 +1148,33 @@ ${occupantsText}
             </div>
           </div>
 
+          {/* ✅ Date du contrat obligatoire */}
+          <div className="mt-6 rounded-xl border border-slate-200 p-4">
+            <div className="text-xs font-semibold tracking-wide text-slate-500">DATE DU CONTRAT (OBLIGATOIRE)</div>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-2 md:items-center">
+              <input
+                className={disabledInputClass}
+                placeholder="JJ/MM/AAAA *"
+                value={contractDate}
+                onChange={(e) => setContractDate(formatContractDateWhileTyping(e.target.value))}
+                disabled={isSigned}
+                inputMode="numeric"
+              />
+              <div className="text-sm text-slate-600">
+                Cette date sera affichée dans la ligne : <span className="font-semibold">“Fait à Carcès, le …”</span>
+              </div>
+            </div>
+
+            {!isSigned && contractDate.trim() ? (
+              parseContractDateFR(contractDate).ok ? null : (
+                <div className="mt-2 text-xs text-amber-700">
+                  Format attendu : JJ/MM/AAAA (ou JJMMAAAA) — ex : 03/02/2026
+                </div>
+              )
+            ) : null}
+          </div>
+
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">CONTRAT (À LIRE)</div>
 
@@ -734,9 +1198,7 @@ ${occupantsText}
                       value={o.first_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) =>
-                          prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x))
-                        );
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
                       }}
                       disabled={isSigned}
                     />
@@ -746,9 +1208,7 @@ ${occupantsText}
                       value={o.last_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) =>
-                          prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x))
-                        );
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
                       }}
                       disabled={isSigned}
                     />
@@ -758,9 +1218,7 @@ ${occupantsText}
                       value={o.age}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) =>
-                          prev.map((x, idx) => (idx === i ? { ...x, age: v } : x))
-                        );
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
                       }}
                       disabled={isSigned}
                       inputMode="numeric"
@@ -812,9 +1270,7 @@ ${occupantsText}
             </label>
 
             {error ? (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </div>
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             ) : null}
 
             {okMsg ? (
