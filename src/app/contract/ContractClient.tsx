@@ -89,15 +89,43 @@ function expectedPeopleCount(booking: Booking): number | null {
   return total > 0 ? total : null;
 }
 
-// ✅ Date contrat (JJ/MM/AAAA) : validation stricte + date réelle (pas 31/02)
-function parseContractDateFR(input: string): { ok: true; normalized: string } | { ok: false } {
-  const s = String(input || "").trim();
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
-  if (!m) return { ok: false };
+function signedDateFRFromIso(iso: string | null | undefined): string | null {
+  const s = String(iso || "").trim();
+  if (!s) return null;
+  const dt = new Date(s);
+  if (Number.isNaN(dt.getTime())) return null;
+  try {
+    return dt.toLocaleDateString("fr-FR");
+  } catch {
+    return null;
+  }
+}
 
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
+// ✅ Date contrat : accepte "JJ/MM/AAAA" OU "JJMMAAAA" (utile sur mobile iOS)
+function parseContractDateFR(
+  input: string
+): { ok: true; normalized: string } | { ok: false } {
+  const s = String(input || "").trim();
+
+  let dd: number;
+  let mm: number;
+  let yyyy: number;
+
+  // 1) format avec /
+  const m1 = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (m1) {
+    dd = Number(m1[1]);
+    mm = Number(m1[2]);
+    yyyy = Number(m1[3]);
+  } else {
+    // 2) format compact "JJMMAAAA"
+    const m2 = /^(\d{8})$/.exec(s.replace(/\D/g, ""));
+    if (!m2) return { ok: false };
+    const digits = m2[1];
+    dd = Number(digits.slice(0, 2));
+    mm = Number(digits.slice(2, 4));
+    yyyy = Number(digits.slice(4, 8));
+  }
 
   if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
   if (yyyy < 1900 || yyyy > 2200) return { ok: false };
@@ -110,103 +138,21 @@ function parseContractDateFR(input: string): { ok: true; normalized: string } | 
     return { ok: false };
   }
 
-  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(
-    4,
-    "0"
-  )}`;
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(4, "0")}`;
 
   return { ok: true, normalized };
 }
 
-// ✅ Annexes — affichés dans le contrat
-const ANNEXE_1 = `
+// ✅ Auto-format mobile : l'utilisateur peut taper "27012026" et on affiche "27/01/2026"
+function formatContractDateWhileTyping(value: string): string {
+  const digits = String(value || "")
+    .replace(/\D/g, "")
+    .slice(0, 8);
 
-- Logement entier (bergerie)
-- Capacité : 8 personnes
-- Extérieurs : jardin / terrasse, espace repas extérieur, barbecue/plancha, transats
-- Piscine privée (avec alarme) + petit bassin naturel
-- Stationnement gratuit sur place (parking)
-- Accès : arrivée autonome possible (selon modalités), accès par chemin privé
-- Connexion Internet : Starlink (maxi vitesse par satellite)
-- Chauffage : poêle à bois + chauffage
-- Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur`;
-const ANNEXE_2 = `
-
-SALLE DE BAIN
-- 2 sèche-cheveux
-- 2 douches à l’italienne
-- Machine à laver
-- Produits de nettoyage
-- Shampooing, savon pour le corps, gel douche
-- Eau chaude
-
-CHAMBRE & LINGE
-- Équipements de base (serviettes, draps, savon, papier toilette)
-- Grand dressing, cintres
-- Draps, couettes, couvertures supplémentaires
-- 4 oreillers par lit + traversins
-- Tables de nuit, lampes de chevet, stores
-- Fer à repasser, étendoir à linge, moustiquaire
-- Espace de rangement pour vêtements
-
-CUISINE & REPAS
-- Cuisine équipée : plaque de cuisson, four, micro-ondes, réfrigérateur, congélateur
-- Lave-vaisselle
-- Ustensiles de cuisine, casseroles, poêles
-- Vaisselle et couverts
-- Cafetière, bouilloire, grille-pain
-- Verres à vin / flûtes, etc.
-
-DIVERTISSEMENT
-- Télévision (chaînes + Netflix + jeux vidéos)
-- Livres & de quoi lire
-- Jeux extérieurs/intérieurs pour enfants
-- Terrain de boules, badminton, panier de basket
-- Jeux aquatiques
-- Piscine
-
-FAMILLE
-- Lit pour bébé + lit parapluie
-- Chaise haute
-- Salle de jeux pour enfants
-- Aire de jeux extérieure
-- Pare-feu pour le poêle
-- Alarme de sécurité pour piscine
-
-RANDONNÉES / NATURE
-- Accès proche : lac, rivière, cascades, canal, forêt
-
-JEUX POUR ADULTES
-- Jeux de société, cartes, etc.`;
-const ANNEXE_3 = `Informations importantes à lire avant signature du contrat
-(merci de lire attentivement et de valider ces points)
-Ce sera un plaisir de vous accueillir 😀
-▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
-▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
-⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
-‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
-🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
-🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
-🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
-❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
-🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
-❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
-🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
-🚮 Poubelles : à emporter à votre départ
-🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
-✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
-📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
-🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
-❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
-🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
-🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
-🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
-✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
-🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
-🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
-🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
-📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
-📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`;
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
 
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES (comme demandé)
@@ -238,7 +184,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
 
-  // ✅ NOUVEAU : date du contrat (obligatoire, saisie manuelle, JJ/MM/AAAA)
+  // ✅ date du contrat (obligatoire, saisie manuelle, JJ/MM/AAAA)
   const [contractDate, setContractDate] = useState<string>(existing?.contract_date || "");
 
   const [occupants, setOccupants] = useState<Occupant[]>([]);
@@ -248,6 +194,9 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [signedOk, setSignedOk] = useState(false);
+
+  // ✅ date figée au moment de la signature (si on vient de signer sans reload)
+  const [signedDateLocal, setSignedDateLocal] = useState<string | null>(null);
 
   const isSigned = Boolean(existing?.signed_at) || signedOk;
 
@@ -523,7 +472,7 @@ En cas d’annulation par le propriétaire (hors force majeure), celui-ci rembou
 Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
@@ -557,8 +506,8 @@ Aucune caméra n’est présente à l’intérieur du logement.
 17) Assurance
 Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent). Il est conseillé de souscrire une assurance annulation.
 
-18) Utilisation paisible — Règlement intérieur
-Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
+18) Utilisation paisible
+Le locataire s’engage à une jouissance paisible des lieux.
 
 19) Cession / Sous-location
 La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
@@ -576,19 +525,16 @@ Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
 ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
-${ANNEXE_1}
 
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-${ANNEXE_2}
 
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-${ANNEXE_3}
-
-Signature du locataire (Annexe 3 — “Lu et approuvé”) :
-[____________________]
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
+
+✅ Structure du contrat
+Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -656,7 +602,7 @@ ${occupantsText}
     // ✅ date de contrat obligatoire (saisie manuelle)
     const parsed = parseContractDateFR(contractDate);
     if (!parsed.ok) {
-      setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA.");
+      setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).");
       return;
     }
 
@@ -696,7 +642,7 @@ ${occupantsText}
           occupants,
           accepted_terms: true,
 
-          // ✅ NOUVEAU : date saisie, normalisée JJ/MM/AAAA
+          // ✅ date saisie, normalisée JJ/MM/AAAA
           contract_date: parsed.normalized,
         }),
       });
@@ -706,6 +652,13 @@ ${occupantsText}
       if (!res.ok || !json?.ok) {
         setError(json?.error || "Erreur lors de la signature.");
         return;
+      }
+
+      // ✅ fige la date au moment exact où l’utilisateur signe (sans attendre un reload)
+      try {
+        setSignedDateLocal(new Date().toLocaleDateString("fr-FR"));
+      } catch {
+        setSignedDateLocal(null);
       }
 
       // ✅ fige aussi la date de contrat côté UI (ce que l'utilisateur a saisi)
@@ -749,7 +702,7 @@ ${occupantsText}
                   <span className="font-semibold">Téléphone :</span> {booking.phone || "—"}
                 </div>
                 <div>
-                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} → 
+                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} →{" "}
                   {formatDateFR(booking.departure_date)} ({nights} nuit(s))
                 </div>
                 {priceTotal ? (
@@ -814,7 +767,7 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* ✅ NOUVEAU : Date du contrat obligatoire */}
+          {/* ✅ Date du contrat obligatoire */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">DATE DU CONTRAT (OBLIGATOIRE)</div>
 
@@ -823,7 +776,7 @@ ${occupantsText}
                 className={disabledInputClass}
                 placeholder="JJ/MM/AAAA *"
                 value={contractDate}
-                onChange={(e) => setContractDate(e.target.value)}
+                onChange={(e) => setContractDate(formatContractDateWhileTyping(e.target.value))}
                 disabled={isSigned}
                 inputMode="numeric"
               />
@@ -834,7 +787,9 @@ ${occupantsText}
 
             {!isSigned && contractDate.trim() ? (
               parseContractDateFR(contractDate).ok ? null : (
-                <div className="mt-2 text-xs text-amber-700">Format attendu : JJ/MM/AAAA (ex : 03/02/2026)</div>
+                <div className="mt-2 text-xs text-amber-700">
+                  Format attendu : JJ/MM/AAAA (ou JJMMAAAA) — ex : 03/02/2026
+                </div>
               )
             ) : null}
           </div>
