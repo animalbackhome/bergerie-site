@@ -30,6 +30,9 @@ type ExistingContract = {
   signer_country: string;
   occupants: Occupant[];
   signed_at?: string | null;
+
+  // ✅ NOUVEAU (si déjà signé / déjà enregistré)
+  contract_date?: string | null; // JJ/MM/AAAA
 } | null;
 
 type Props = {
@@ -65,6 +68,20 @@ function toMoneyEUR(v: any): string {
   return `${n.toFixed(2)} €`;
 }
 
+function pickNumber(obj: any, keys: string[]): number | null {
+  const o = obj || {};
+  for (const k of keys) {
+    const v = o?.[k];
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 function expectedPeopleCount(booking: Booking): number | null {
   const a = Number(booking?.adults_count ?? 0);
   const c = Number(booking?.children_count ?? 0);
@@ -72,28 +89,158 @@ function expectedPeopleCount(booking: Booking): number | null {
   return total > 0 ? total : null;
 }
 
-/**
- * Optionnel (mais recommandé) :
- * tu peux définir ces valeurs dans Vercel env (NEXT_PUBLIC_...) pour auto-remplir le contrat.
- */
-const OWNER = {
-  name: process.env.NEXT_PUBLIC_OWNER_NAME || "",
-  address: process.env.NEXT_PUBLIC_OWNER_ADDRESS || "",
-  email: process.env.NEXT_PUBLIC_OWNER_EMAIL || "",
-  phone: process.env.NEXT_PUBLIC_OWNER_PHONE || "",
-};
+// ✅ Date contrat (JJ/MM/AAAA) : validation stricte + date réelle (pas 31/02)
+function parseContractDateFR(input: string): { ok: true; normalized: string } | { ok: false } {
+  const s = String(input || "").trim();
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (!m) return { ok: false };
 
-const PROPERTY_ADDRESS = process.env.NEXT_PUBLIC_PROPERTY_ADDRESS || "";
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
+  if (yyyy < 1900 || yyyy > 2200) return { ok: false };
+  if (mm < 1 || mm > 12) return { ok: false };
+  if (dd < 1 || dd > 31) return { ok: false };
+
+  // validation calendrier réelle
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) {
+    return { ok: false };
+  }
+
+  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(
+    4,
+    "0"
+  )}`;
+
+  return { ok: true, normalized };
+}
+
+// ✅ Annexes — affichés dans le contrat
+const ANNEXE_1 = `
+
+- Logement entier (bergerie)
+- Capacité : 8 personnes
+- Extérieurs : jardin / terrasse, espace repas extérieur, barbecue/plancha, transats
+- Piscine privée (avec alarme) + petit bassin naturel
+- Stationnement gratuit sur place (parking)
+- Accès : arrivée autonome possible (selon modalités), accès par chemin privé
+- Connexion Internet : Starlink (maxi vitesse par satellite)
+- Chauffage : poêle à bois + chauffage
+- Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur`;
+const ANNEXE_2 = `
+
+SALLE DE BAIN
+- 2 sèche-cheveux
+- 2 douches à l’italienne
+- Machine à laver
+- Produits de nettoyage
+- Shampooing, savon pour le corps, gel douche
+- Eau chaude
+
+CHAMBRE & LINGE
+- Équipements de base (serviettes, draps, savon, papier toilette)
+- Grand dressing, cintres
+- Draps, couettes, couvertures supplémentaires
+- 4 oreillers par lit + traversins
+- Tables de nuit, lampes de chevet, stores
+- Fer à repasser, étendoir à linge, moustiquaire
+- Espace de rangement pour vêtements
+
+CUISINE & REPAS
+- Cuisine équipée : plaque de cuisson, four, micro-ondes, réfrigérateur, congélateur
+- Lave-vaisselle
+- Ustensiles de cuisine, casseroles, poêles
+- Vaisselle et couverts
+- Cafetière, bouilloire, grille-pain
+- Verres à vin / flûtes, etc.
+
+DIVERTISSEMENT
+- Télévision (chaînes + Netflix + jeux vidéos)
+- Livres & de quoi lire
+- Jeux extérieurs/intérieurs pour enfants
+- Terrain de boules, badminton, panier de basket
+- Jeux aquatiques
+- Piscine
+
+FAMILLE
+- Lit pour bébé + lit parapluie
+- Chaise haute
+- Salle de jeux pour enfants
+- Aire de jeux extérieure
+- Pare-feu pour le poêle
+- Alarme de sécurité pour piscine
+
+RANDONNÉES / NATURE
+- Accès proche : lac, rivière, cascades, canal, forêt
+
+JEUX POUR ADULTES
+- Jeux de société, cartes, etc.`;
+const ANNEXE_3 = `Informations importantes à lire avant signature du contrat
+(merci de lire attentivement et de valider ces points)
+Ce sera un plaisir de vous accueillir 😀
+▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
+▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
+⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
+‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
+🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
+🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
+🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
+❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
+🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
+❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
+🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
+🚮 Poubelles : à emporter à votre départ
+🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
+✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
+📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
+🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
+❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
+🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
+🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
+🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
+✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
+🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
+🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
+🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
+📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
+📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`;
 
 export default function ContractClient({ booking, token, existing }: Props) {
+  // ✅ Coordonnées propriétaire FIXES (comme demandé)
+  const OWNER = useMemo(
+    () => ({
+      name: "Laurens Coralie",
+      address: "2542 chemin des près neufs 83570 Carcès",
+      email: "laurens-coralie@hotmail.com",
+      phone: "0629465295",
+    }),
+    []
+  );
+
+  // ✅ Adresse du logement FIXE (comme demandé)
+  const PROPERTY_ADDRESS = useMemo(() => "2542 chemin des près neufs 83570 Carcès", []);
+
   const expectedCount = useMemo(() => expectedPeopleCount(booking), [booking]);
-  const hardCount = expectedCount ?? 1;
+
+  // ✅ on autorise jusqu’à 8, MAIS si la demande (adultes+enfants) est connue, on limite à ce nombre
+  const maxOccupants = useMemo(() => {
+    const e = expectedCount;
+    if (e != null && e > 0) return Math.min(8, e);
+    return 8;
+  }, [expectedCount]);
 
   const [addressLine1, setAddressLine1] = useState(existing?.signer_address_line1 || "");
   const [addressLine2, setAddressLine2] = useState(existing?.signer_address_line2 || "");
   const [postalCode, setPostalCode] = useState(existing?.signer_postal_code || "");
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
+
+  // ✅ NOUVEAU : date du contrat (obligatoire, saisie manuelle, JJ/MM/AAAA)
+  const [contractDate, setContractDate] = useState<string>(existing?.contract_date || "");
+
   const [occupants, setOccupants] = useState<Occupant[]>([]);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
@@ -105,25 +252,22 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const isSigned = Boolean(existing?.signed_at) || signedOk;
 
   useEffect(() => {
-    // Initialiser occupants : EXACTEMENT le nombre demandé (adultes + enfants)
-    const desired = hardCount;
-
-    // 1) si un contrat existe déjà et a exactement le bon nombre -> reprendre
-    if (existing?.occupants?.length === desired) {
+    // 1) si un contrat existe déjà -> reprendre
+    if (existing?.occupants?.length) {
       setOccupants(existing.occupants.map((o) => ({ ...o })));
       return;
     }
 
-    // 2) sinon -> générer une liste de "desired" lignes
+    // 2) sinon -> générer une liste selon la demande (adultes+enfants) si dispo, sinon 1 personne
+    const desired = maxOccupants > 0 ? maxOccupants : 1;
+
     const first = splitName(booking.full_name);
     const base: Occupant[] = Array.from({ length: desired }).map((_, i) => {
-      if (i === 0) {
-        return { first_name: first.first, last_name: first.last, age: "" };
-      }
+      if (i === 0) return { first_name: first.first, last_name: first.last, age: "" };
       return { first_name: "", last_name: "", age: "" };
     });
     setOccupants(base);
-  }, [existing, booking.full_name, hardCount]);
+  }, [existing, booking.full_name, maxOccupants]);
 
   const disabledInputClass =
     "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 placeholder:text-slate-400 shadow-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:bg-slate-50 disabled:text-slate-900 disabled:opacity-100";
@@ -133,33 +277,139 @@ export default function ContractClient({ booking, token, existing }: Props) {
     [booking.arrival_date, booking.departure_date]
   );
 
-  const priceTotal = useMemo(() => {
-    // On essaie plusieurs clés possibles selon ton objet pricing
+  /**
+   * ✅ PRICING : conforme à la demande
+   * - Total : pricing.total si présent (source de vérité)
+   * - Hébergement : pricing.base_accommodation (ou calcul si manquant)
+   * - Ménage : fixe (fallback 100)
+   * - Options : si options_total existe => on l'utilise ; sinon on somme toutes les clés "options"
+   *   existantes dans pricing (numériques) en excluant les postes non-options.
+   * - Taxe : tourist_tax
+   * - Acompte : 30% total / Solde : total - acompte
+   */
+  const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
-    const v =
-      p?.total ??
-      p?.total_price ??
-      p?.grand_total ??
-      p?.amount_total ??
-      null;
 
-    return v != null ? toMoneyEUR(v) : "";
+    const total = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+
+    const cleaning = pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
+
+    const accommodation =
+      pickNumber(p, [
+        "base_accommodation",
+        "base",
+        "base_total",
+        "accommodation",
+        "accommodation_total",
+        "stay",
+        "stay_total",
+        "lodging",
+        "lodging_total",
+      ]) ?? null;
+
+    const touristTax =
+      pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
+
+    // ✅ options_total direct (si présent)
+    const optionsDirect =
+      pickNumber(p, ["options_total", "extras_total", "extras", "options", "addon_total", "add_ons_total"]) ?? null;
+
+    // ✅ sinon : somme de toutes les options stockées (numériques) en excluant les postes non-options
+    const optionsComputed = (() => {
+      const excluded = new Set([
+        "currency",
+        "total",
+        "total_price",
+        "grand_total",
+        "amount_total",
+        "base_accommodation",
+        "base",
+        "base_total",
+        "accommodation",
+        "accommodation_total",
+        "stay",
+        "stay_total",
+        "lodging",
+        "lodging_total",
+        "cleaning",
+        "cleaning_fee",
+        "cleaningFee",
+        "menage",
+        "tourist_tax",
+        "taxe_sejour",
+        "taxe_de_sejour",
+        "city_tax",
+        "local_tax",
+        // on exclut aussi options_total et ses alias pour éviter double comptage
+        "options_total",
+        "extras_total",
+        "extras",
+        "options",
+        "addon_total",
+        "add_ons_total",
+      ]);
+
+      let sum = 0;
+      for (const [k, v] of Object.entries(p || {})) {
+        if (excluded.has(k)) continue;
+        const n = Number(v as any);
+        if (!Number.isFinite(n)) continue;
+        sum += n;
+      }
+      return round2(sum);
+    })();
+
+    const options = optionsDirect != null ? optionsDirect : optionsComputed;
+
+    // Si accommodation manquante MAIS total présent : calcul propre
+    let accommodationFixed = accommodation;
+    if (accommodationFixed == null && total != null) {
+      const computed = total - cleaning - options - touristTax;
+      accommodationFixed = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
+    }
+
+    // acompte 30% / solde 70%
+    const deposit30 = total != null ? round2(total * 0.3) : null;
+    const solde = total != null && deposit30 != null ? round2(total - deposit30) : null;
+
+    return {
+      total,
+      accommodation: accommodationFixed,
+      cleaning,
+      options,
+      touristTax,
+      deposit30,
+      solde,
+    };
   }, [booking.pricing]);
 
-  const deposit30 = useMemo(() => {
-    // Montant estimé (30%) calculé depuis le total si dispo
-    const p = booking?.pricing || {};
-    const v =
-      p?.total ??
-      p?.total_price ??
-      p?.grand_total ??
-      p?.amount_total ??
-      null;
+  const priceTotal = useMemo(
+    () => (pricingNumbers.total != null ? toMoneyEUR(pricingNumbers.total) : ""),
+    [pricingNumbers.total]
+  );
 
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "";
-    return toMoneyEUR(n * 0.3);
-  }, [booking.pricing]);
+  const deposit30 = useMemo(
+    () => (pricingNumbers.deposit30 != null ? toMoneyEUR(pricingNumbers.deposit30) : ""),
+    [pricingNumbers.deposit30]
+  );
+
+  const solde70 = useMemo(() => (pricingNumbers.solde != null ? toMoneyEUR(pricingNumbers.solde) : ""), [
+    pricingNumbers.solde,
+  ]);
+
+  // ✅ Affichage dans "Fait à Carcès, le …" :
+  // - si contrat déjà signé => date enregistrée (existing.contract_date)
+  // - sinon => date saisie par l’utilisateur (contractDate)
+  const signatureDateFR = useMemo(() => {
+    const fromDb = String(existing?.contract_date || "").trim();
+    if (fromDb) return fromDb;
+
+    const typed = String(contractDate || "").trim();
+    if (typed) return typed;
+
+    // avant saisie : placeholder neutre (pas de date auto imposée)
+    return "[date]";
+  }, [existing?.contract_date, contractDate]);
 
   const contractText = useMemo(() => {
     const occupantsText = occupants
@@ -179,16 +429,24 @@ export default function ContractClient({ booking, token, existing }: Props) {
         .filter(Boolean)
         .join(", ") || "[Adresse à compléter]";
 
-    // IMPORTANT: le texte ci-dessous contient TOUT le contrat + annexes,
-    // sans suppression. Les champs [____] restent visibles si une info n'est pas connue.
+    const accommodationText =
+      pricingNumbers.accommodation != null ? toMoneyEUR(pricingNumbers.accommodation) : "[____ €]";
+
+    const cleaningText = pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
+
+    const optionsText = pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
+
+    const touristTaxText =
+      pricingNumbers.touristTax != null ? toMoneyEUR(pricingNumbers.touristTax) : "[____ €]";
+
     return `CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —
 
 1) Parties
 Propriétaire (Bailleur)
-Nom / Prénom : ${OWNER.name || "[]"}
-Adresse : ${OWNER.address || "[]"}
-E-mail : ${OWNER.email || "[]"}
-Téléphone : ${OWNER.phone || "[]"}
+Nom / Prénom : ${OWNER.name}
+Adresse : ${OWNER.address}
+E-mail : ${OWNER.email}
+Téléphone : ${OWNER.phone}
 
 Locataire
 Nom / Prénom : ${booking.full_name || "[]"}
@@ -200,21 +458,19 @@ Le locataire déclare être majeur et avoir la capacité de contracter.
 
 2) Logement loué
 Désignation : Location saisonnière meublée
-Adresse du logement : ${PROPERTY_ADDRESS || "[____________________]"}
+Adresse du logement : ${PROPERTY_ADDRESS}
 Capacité maximale : 8 personnes (voir Article 11).
 Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
 
 Annexes (faisant partie intégrante du contrat) :
-Annexe 1 : État descriptif du logement (repris du site)
-Annexe 2 : Inventaire / liste équipements (repris du site)
-Annexe 3 : Règlement intérieur (repris et signé)
+Annexe 1 : État descriptif du logement
+Annexe 2 : Inventaire / liste équipements
+Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
-Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(
-      booking.departure_date
-    )} pour ${nights} nuits.
-Horaires standard (selon ton site)
+Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(booking.departure_date)} pour ${nights} nuits.
+Horaires standard
 Arrivée (check-in) : entre 16h et 18h
 Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
 Options (si accord préalable et selon disponibilités) :
@@ -223,10 +479,10 @@ Départ fin de journée : +70€
 
 4) Prix — Taxes — Prestations
 Prix total du séjour : ${priceTotal || "[____ €]"} comprenant :
-Hébergement : [____ €]
-Forfait ménage : 100€
-Options éventuelles : [____ €]
-Taxe de séjour : [____ €] (si applicable / selon règles locales)
+Hébergement : ${accommodationText}
+Forfait ménage : ${cleaningText}
+Options éventuelles : ${optionsText}
+Taxe de séjour : ${touristTaxText} (si applicable / selon règles locales)
 
 5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
 Mode de paiement : virement bancaire uniquement.
@@ -237,7 +493,7 @@ Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
-Le solde, soit [____ €], doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
+Le solde, soit ${solde70 || "[____ €]"}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
 À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de relance, le propriétaire pourra considérer la réservation comme annulée par le locataire, l’acompte restant acquis au propriétaire.
 
 6) Formation du contrat — Réservation
@@ -267,7 +523,7 @@ En cas d’annulation par le propriétaire (hors force majeure), celui-ci rembou
 Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
@@ -277,7 +533,7 @@ Le barbecue/plancha doivent être rendus propres. Les frais de remise en état, 
 12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)
 Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée.
 Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre :
-dégradations, pertes, casse, nettoyage anormal, non-respect du règlement intérieur.
+dégradations, pertes, casse, nettoyage anormal.
 En cas de retenue, le propriétaire pourra fournir, selon le cas, photos + devis/factures justifiant la retenue.
 
 13) Identité du locataire
@@ -312,90 +568,27 @@ Contrat entre particuliers. En cas de difficulté, les parties recherchent une s
 À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
 
 Signatures
-Fait à [ville], le [date].
+Fait à Carcès, le ${signatureDateFR}.
 En 2 exemplaires.
 Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
+ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
+${ANNEXE_1}
+
+ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
+${ANNEXE_2}
+
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-(On colle ici ton règlement complet + signature “Lu et approuvé” du locataire.)
+${ANNEXE_3}
 
-✅ Structure du contrat (version actuelle — “ma base”)
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide :
-A) Identification des parties
-Propriétaire (bailleur) : identité + coordonnées
-Locataire : identité + coordonnées
-Déclaration de capacité à contracter
-B) Désignation de la location
-Nature : location saisonnière meublée
-Adresse / capacité / usage (résidence de vacances)
-C) Durée — Dates — Horaires
-Dates du séjour + nombre de nuits
-Horaires conformes au site :
-arrivée 16h–18h
-départ 10h max
-options possibles : arrivée début de journée (+70€) / départ fin de journée (+70€) selon disponibilité
-D) Prix — Taxes — Prestations
-Détail du prix total
-Forfait ménage fixe : 100€
-Taxe de séjour (si applicable) + options éventuelles
-E) Paiement (virement uniquement)
-Paiement par RIB uniquement (pas de chèque)
-Acompte 30% : qualifié explicitement comme acompte (et non arrhes)
-Solde à payer au plus tard 7 jours avant l’arrivée
-F) Réservation / engagement
-Réservation effective à réception :
-contrat signé
-acompte payé
-Le solde reste exigible selon les délais prévus
-G) Pas de droit de rétractation
-Mention spécifique à l’hébergement à date déterminée
-Renvoi clair aux conditions d’annulation
-H) Annulation / No-show / séjour écourté (protection maximale)
-Acompte : non remboursable
-Après paiement du solde (J-7) : aucun remboursement, quel que soit le motif
-No-show : entrée impossible à partir de minuit, règles de disposition du logement ensuite
-I) Annulation par le propriétaire
-Remboursement intégral des sommes versées
-Pas d’indemnité forfaitaire
-J) État des lieux / entretien / ménage
-État des lieux d’entrée + sortie signé
-Conditions ménage + remise en état si abus/dégradations
-K) Caution / dépôt de garantie
-Caution : 500€ en liquide à l’arrivée
-Restitution après état des lieux de sortie
-Retenues possibles (dégradations/pertes/ménage anormal), justificatifs possibles (photos + devis/factures si nécessaire)
-L) Vérification d’identité
-À l’arrivée : présentation d’une pièce d’identité au nom du réservant
-Aucun numéro de pièce relevé
-M) Capacité / personnes supplémentaires / visiteurs
-Max 8 personnes
-Surcoûts : 50€/pers/nuit + 50€/visiteur journée (même sans nuitée)
-Interdiction personnes non déclarées
-N) Animaux
-Acceptés sous conditions
-Supplément : 10€/chien/nuit (à régler à l’arrivée)
-O) Caméras
-Présence de caméras uniquement sur les accès extérieurs (information obligatoire)
-P) Assurance
-Responsabilité civile villégiature conseillée / exigée
-Q) Utilisation paisible + règlement intérieur
-Respect du règlement intérieur obligatoire
-Interdictions et règles détaillées
-R) Cession / sous-location
-Interdite sans accord écrit
-S) Litiges
-Recherche d’accord amiable
-Compétence selon règles de droit commun
+Signature du locataire (Annexe 3 — “Lu et approuvé”) :
+[____________________]
 
-2) Annexes (très important)
-Le contrat est complété par des annexes qui font partie intégrante du dossier :
-Annexe 1 — État descriptif du logement : informations détaillées (surface, équipements, prestations), pouvant être repris automatiquement depuis le site
-Annexe 2 — Inventaire : liste équipements/objets, pouvant aussi être générée depuis la base du site
-Annexe 3 — Règlement intérieur : le règlement complet à valider avant location
-Annexe 4 — État des lieux d’entrée / sortie : document signé sur place
+ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
+(À signer sur place.)
 
 —
 Personnes présentes pendant la location (nom, prénom, âge)
@@ -416,6 +609,14 @@ ${occupantsText}
     nights,
     priceTotal,
     deposit30,
+    solde70,
+    OWNER,
+    PROPERTY_ADDRESS,
+    pricingNumbers.accommodation,
+    pricingNumbers.cleaning,
+    pricingNumbers.options,
+    pricingNumbers.touristTax,
+    signatureDateFR,
   ]);
 
   const allOccupantsFilled = useMemo(() => {
@@ -426,6 +627,20 @@ ${occupantsText}
       return Boolean(fn && ln && ag);
     });
   }, [occupants]);
+
+  function addOccupant() {
+    if (isSigned) return;
+    if (occupants.length >= maxOccupants) return;
+    setOccupants((prev) => [...prev, { first_name: "", last_name: "", age: "" }]);
+  }
+
+  function removeOccupant(index: number) {
+    if (isSigned) return;
+    setOccupants((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+  }
 
   async function onSubmit() {
     setError(null);
@@ -438,13 +653,25 @@ ${occupantsText}
       return;
     }
 
+    // ✅ date de contrat obligatoire (saisie manuelle)
+    const parsed = parseContractDateFR(contractDate);
+    if (!parsed.ok) {
+      setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA.");
+      return;
+    }
+
     if (!acceptedTerms) {
       setError("Vous devez accepter le contrat.");
       return;
     }
 
-    if (occupants.length !== hardCount) {
-      setError(`Vous devez renseigner exactement ${hardCount} personne(s), comme dans votre demande.`);
+    if (occupants.length < 1) {
+      setError("Ajoutez au moins une personne (nom, prénom, âge).");
+      return;
+    }
+
+    if (occupants.length > maxOccupants) {
+      setError(`Maximum ${maxOccupants} personne(s).`);
       return;
     }
 
@@ -468,6 +695,9 @@ ${occupantsText}
           signer_country: country,
           occupants,
           accepted_terms: true,
+
+          // ✅ NOUVEAU : date saisie, normalisée JJ/MM/AAAA
+          contract_date: parsed.normalized,
         }),
       });
 
@@ -477,6 +707,9 @@ ${occupantsText}
         setError(json?.error || "Erreur lors de la signature.");
         return;
       }
+
+      // ✅ fige aussi la date de contrat côté UI (ce que l'utilisateur a saisi)
+      setContractDate(parsed.normalized);
 
       setSignedOk(true);
       setOkMsg("Contrat signé ✅ Un email de confirmation a été envoyé.");
@@ -489,7 +722,6 @@ ${occupantsText}
 
   return (
     <div className="min-h-screen bg-slate-950">
-      {/* Bandeau haut (plus sombre) */}
       <div className="bg-gradient-to-r from-[#06243D] via-[#053A63] to-[#0B2A7A]">
         <div className="mx-auto max-w-6xl px-6 py-10">
           <div className="text-white/80 text-sm">Superbe bergerie • Contrat de location</div>
@@ -503,7 +735,6 @@ ${occupantsText}
             Les informations importantes (dates, prix, réservation) sont verrouillées.
           </div>
 
-          {/* Top cards */}
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="text-xs font-semibold tracking-wide text-slate-500">RÉSERVATION</div>
@@ -518,7 +749,7 @@ ${occupantsText}
                   <span className="font-semibold">Téléphone :</span> {booking.phone || "—"}
                 </div>
                 <div>
-                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} →{" "}
+                  <span className="font-semibold">Dates :</span> {formatDateFR(booking.arrival_date)} → 
                   {formatDateFR(booking.departure_date)} ({nights} nuit(s))
                 </div>
                 {priceTotal ? (
@@ -530,7 +761,11 @@ ${occupantsText}
                   <div>
                     <span className="font-semibold">Personnes demandées :</span> {expectedCount} (adultes + enfants)
                   </div>
-                ) : null}
+                ) : (
+                  <div>
+                    <span className="font-semibold">Personnes :</span> jusqu’à 8
+                  </div>
+                )}
               </div>
             </div>
 
@@ -579,7 +814,31 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Contract full text */}
+          {/* ✅ NOUVEAU : Date du contrat obligatoire */}
+          <div className="mt-6 rounded-xl border border-slate-200 p-4">
+            <div className="text-xs font-semibold tracking-wide text-slate-500">DATE DU CONTRAT (OBLIGATOIRE)</div>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-2 md:items-center">
+              <input
+                className={disabledInputClass}
+                placeholder="JJ/MM/AAAA *"
+                value={contractDate}
+                onChange={(e) => setContractDate(e.target.value)}
+                disabled={isSigned}
+                inputMode="numeric"
+              />
+              <div className="text-sm text-slate-600">
+                Cette date sera affichée dans la ligne : <span className="font-semibold">“Fait à Carcès, le …”</span>
+              </div>
+            </div>
+
+            {!isSigned && contractDate.trim() ? (
+              parseContractDateFR(contractDate).ok ? null : (
+                <div className="mt-2 text-xs text-amber-700">Format attendu : JJ/MM/AAAA (ex : 03/02/2026)</div>
+              )
+            ) : null}
+          </div>
+
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">CONTRAT (À LIRE)</div>
 
@@ -588,56 +847,78 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* Occupants (exact count) */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">
-              PERSONNES PRÉSENTES PENDANT LA LOCATION (NOM, PRÉNOM, ÂGE) — EXACTEMENT {hardCount}
+              PERSONNES PRÉSENTES PENDANT LA LOCATION (NOM, PRÉNOM, ÂGE) — MAX {maxOccupants}
             </div>
 
             <div className="mt-4 space-y-3">
               {occupants.map((o, i) => (
-                <div key={i} className="grid gap-3 md:grid-cols-3">
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Prénom *"
-                    value={o.first_name}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
-                    }}
-                    disabled={isSigned}
-                  />
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Nom *"
-                    value={o.last_name}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
-                    }}
-                    disabled={isSigned}
-                  />
-                  <input
-                    className={disabledInputClass}
-                    placeholder="Âge *"
-                    value={o.age}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
-                    }}
-                    disabled={isSigned}
-                    inputMode="numeric"
-                  />
+                <div key={i} className="space-y-2">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Prénom *"
+                      value={o.first_name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
+                      }}
+                      disabled={isSigned}
+                    />
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Nom *"
+                      value={o.last_name}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
+                      }}
+                      disabled={isSigned}
+                    />
+                    <input
+                      className={disabledInputClass}
+                      placeholder="Âge *"
+                      value={o.age}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
+                      }}
+                      disabled={isSigned}
+                      inputMode="numeric"
+                    />
+                  </div>
+
+                  {occupants.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeOccupant(i)}
+                      disabled={isSigned}
+                      className="text-xs text-slate-600 underline disabled:opacity-50"
+                    >
+                      Supprimer cette personne
+                    </button>
+                  ) : null}
                 </div>
               ))}
             </div>
 
-            <div className="mt-3 text-sm text-slate-600">
-              Pour signer, toutes les personnes (nom, prénom, âge) doivent être renseignées.
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={addOccupant}
+                disabled={isSigned || occupants.length >= maxOccupants}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                + Ajouter une personne
+              </button>
+
+              <div className="text-sm text-slate-600">
+                Pour signer, toutes les personnes (nom, prénom, âge) doivent être renseignées.
+              </div>
             </div>
           </div>
 
-          {/* Signature */}
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">SIGNATURE</div>
 
@@ -649,15 +930,11 @@ ${occupantsText}
                 onChange={(e) => setAcceptedTerms(e.target.checked)}
                 disabled={isSigned}
               />
-              <span>
-                J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.
-              </span>
+              <span>J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.</span>
             </label>
 
             {error ? (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </div>
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             ) : null}
 
             {okMsg ? (
