@@ -118,8 +118,8 @@ function parseContractDateFR(input: string): { ok: true; normalized: string } | 
   return { ok: true, normalized };
 }
 
-// ✅ Annexes (repris du site) — affichés dans le contrat
-const ANNEXE_1 = `(État descriptif du logement — repris du site)
+// ✅ Annexes — affichés dans le contrat
+const ANNEXE_1 = `
 
 - Logement entier (bergerie)
 - Capacité : 8 personnes
@@ -130,7 +130,7 @@ const ANNEXE_1 = `(État descriptif du logement — repris du site)
 - Connexion Internet : Starlink (maxi vitesse par satellite)
 - Chauffage : poêle à bois + chauffage
 - Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur`;
-const ANNEXE_2 = `(Inventaire / équipements — repris du site)
+const ANNEXE_2 = `
 
 SALLE DE BAIN
 - 2 sèche-cheveux
@@ -178,26 +178,35 @@ RANDONNÉES / NATURE
 
 JEUX POUR ADULTES
 - Jeux de société, cartes, etc.`;
-const ANNEXE_3 = `(Règlement intérieur — repris du site)
-
-RESPECT DU LIEU
-- Maison non-fumeur (possible en extérieur uniquement).
-- Fêtes et enterrements de vie de jeune fille / garçon non acceptés.
-- Nombre de voyageurs : 8 personnes et plus sur demande avec supplément.
-- Pas de visiteurs extérieurs sans accord.
-
-PISCINE
-- Enfants sous surveillance obligatoire (piscine non clôturée avec alarme de sécurité).
-- Interdit de plonger (profondeur variable).
-- Merci de se rincer avant baignade (crème/huile).
-
-ANIMAUX
-- Animaux acceptés uniquement sur demande (à préciser avant réservation), sans limite de nombre et reminder : supplément.
-- Merci de ramasser les excréments et de respecter l’intérieur (poils / boue / griffes sur canapé/lits...).
-
-MÉNAGE / LINGE
-- La maison doit être rendue “correcte” (vaisselle, poubelles, etc.).
-- Serviettes fournies : merci de ne pas les utiliser pour l’extérieur / piscine.`;
+const ANNEXE_3 = `Informations importantes à lire avant signature du contrat
+(merci de lire attentivement et de valider ces points)
+Ce sera un plaisir de vous accueillir 😀
+▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
+▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
+⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
+‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
+🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
+🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
+🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
+❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
+🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
+❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
+🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
+🚮 Poubelles : à emporter à votre départ
+🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
+✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
+📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
+🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
+❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
+🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
+🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
+🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
+✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
+🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
+🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
+🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
+📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
+📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`;
 
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES (comme demandé)
