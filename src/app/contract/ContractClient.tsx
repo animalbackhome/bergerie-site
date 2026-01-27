@@ -30,9 +30,6 @@ type ExistingContract = {
   signer_country: string;
   occupants: Occupant[];
   signed_at?: string | null;
-
-  // ✅ NOUVEAU (si déjà signé / déjà enregistré)
-  contract_date?: string | null; // JJ/MM/AAAA
 } | null;
 
 type Props = {
@@ -101,59 +98,6 @@ function signedDateFRFromIso(iso: string | null | undefined): string | null {
   }
 }
 
-// ✅ Date contrat : accepte "JJ/MM/AAAA" OU "JJMMAAAA" (utile sur mobile iOS)
-function parseContractDateFR(
-  input: string
-): { ok: true; normalized: string } | { ok: false } {
-  const s = String(input || "").trim();
-
-  let dd: number;
-  let mm: number;
-  let yyyy: number;
-
-  // 1) format avec /
-  const m1 = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
-  if (m1) {
-    dd = Number(m1[1]);
-    mm = Number(m1[2]);
-    yyyy = Number(m1[3]);
-  } else {
-    // 2) format compact "JJMMAAAA"
-    const m2 = /^(\d{8})$/.exec(s.replace(/\D/g, ""));
-    if (!m2) return { ok: false };
-    const digits = m2[1];
-    dd = Number(digits.slice(0, 2));
-    mm = Number(digits.slice(2, 4));
-    yyyy = Number(digits.slice(4, 8));
-  }
-
-  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
-  if (yyyy < 1900 || yyyy > 2200) return { ok: false };
-  if (mm < 1 || mm > 12) return { ok: false };
-  if (dd < 1 || dd > 31) return { ok: false };
-
-  // validation calendrier réelle
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
-  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) {
-    return { ok: false };
-  }
-
-  const normalized = `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy).padStart(4, "0")}`;
-
-  return { ok: true, normalized };
-}
-
-// ✅ Auto-format mobile : l'utilisateur peut taper "27012026" et on affiche "27/01/2026"
-function formatContractDateWhileTyping(value: string): string {
-  const digits = String(value || "")
-    .replace(/\D/g, "")
-    .slice(0, 8);
-
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
-}
-
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES (comme demandé)
   const OWNER = useMemo(
@@ -183,9 +127,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [postalCode, setPostalCode] = useState(existing?.signer_postal_code || "");
   const [city, setCity] = useState(existing?.signer_city || "");
   const [country, setCountry] = useState(existing?.signer_country || "France");
-
-  // ✅ date du contrat (obligatoire, saisie manuelle, JJ/MM/AAAA)
-  const [contractDate, setContractDate] = useState<string>(existing?.contract_date || "");
 
   const [occupants, setOccupants] = useState<Occupant[]>([]);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -239,9 +180,11 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const pricingNumbers = useMemo(() => {
     const p = booking?.pricing || {};
 
-    const total = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+    const total =
+      pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
 
-    const cleaning = pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
+    const cleaning =
+      pickNumber(p, ["cleaning", "cleaning_fee", "cleaningFee", "menage"]) ?? 100;
 
     const accommodation =
       pickNumber(p, [
@@ -342,23 +285,30 @@ export default function ContractClient({ booking, token, existing }: Props) {
     [pricingNumbers.deposit30]
   );
 
-  const solde70 = useMemo(() => (pricingNumbers.solde != null ? toMoneyEUR(pricingNumbers.solde) : ""), [
-    pricingNumbers.solde,
-  ]);
+  const solde70 = useMemo(
+    () => (pricingNumbers.solde != null ? toMoneyEUR(pricingNumbers.solde) : ""),
+    [pricingNumbers.solde]
+  );
 
-  // ✅ Affichage dans "Fait à Carcès, le …" :
-  // - si contrat déjà signé => date enregistrée (existing.contract_date)
-  // - sinon => date saisie par l’utilisateur (contractDate)
+  const contractTodayFR = useMemo(() => {
+    try {
+      return new Date().toLocaleDateString("fr-FR");
+    } catch {
+      return "";
+    }
+  }, []);
+
   const signatureDateFR = useMemo(() => {
-    const fromDb = String(existing?.contract_date || "").trim();
+    // ✅ priorité : date enregistrée en base (moment réel de signature)
+    const fromDb = signedDateFRFromIso(existing?.signed_at);
     if (fromDb) return fromDb;
 
-    const typed = String(contractDate || "").trim();
-    if (typed) return typed;
+    // ✅ sinon : si on vient de signer, on fige la date locale
+    if (signedDateLocal) return signedDateLocal;
 
-    // avant saisie : placeholder neutre (pas de date auto imposée)
-    return "[date]";
-  }, [existing?.contract_date, contractDate]);
+    // ✅ sinon (avant signature) : date du jour (affichage)
+    return contractTodayFR || "[date]";
+  }, [existing?.signed_at, signedDateLocal, contractTodayFR]);
 
   const contractText = useMemo(() => {
     const occupantsText = occupants
@@ -381,9 +331,11 @@ export default function ContractClient({ booking, token, existing }: Props) {
     const accommodationText =
       pricingNumbers.accommodation != null ? toMoneyEUR(pricingNumbers.accommodation) : "[____ €]";
 
-    const cleaningText = pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
+    const cleaningText =
+      pricingNumbers.cleaning != null ? toMoneyEUR(pricingNumbers.cleaning) : "100€";
 
-    const optionsText = pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
+    const optionsText =
+      pricingNumbers.options != null ? toMoneyEUR(pricingNumbers.options) : "[____ €]";
 
     const touristTaxText =
       pricingNumbers.touristTax != null ? toMoneyEUR(pricingNumbers.touristTax) : "[____ €]";
@@ -414,11 +366,12 @@ Le logement est loué à titre de résidence de vacances. Le locataire ne pourra
 Annexes (faisant partie intégrante du contrat) :
 Annexe 1 : État descriptif du logement
 Annexe 2 : Inventaire / liste équipements
-Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
-Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(booking.departure_date)} pour ${nights} nuits.
+Période : du ${formatDateFR(booking.arrival_date)} au ${formatDateFR(
+      booking.departure_date
+    )} pour ${nights} nuits.
 Horaires standard
 Arrivée (check-in) : entre 16h et 18h
 Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
@@ -525,10 +478,10 @@ Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 [____________________]
 
 ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
+(Repris du site.)
 
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-
-ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
+(Repris du site.)
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
@@ -599,13 +552,6 @@ ${occupantsText}
       return;
     }
 
-    // ✅ date de contrat obligatoire (saisie manuelle)
-    const parsed = parseContractDateFR(contractDate);
-    if (!parsed.ok) {
-      setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).");
-      return;
-    }
-
     if (!acceptedTerms) {
       setError("Vous devez accepter le contrat.");
       return;
@@ -641,9 +587,6 @@ ${occupantsText}
           signer_country: country,
           occupants,
           accepted_terms: true,
-
-          // ✅ date saisie, normalisée JJ/MM/AAAA
-          contract_date: parsed.normalized,
         }),
       });
 
@@ -660,9 +603,6 @@ ${occupantsText}
       } catch {
         setSignedDateLocal(null);
       }
-
-      // ✅ fige aussi la date de contrat côté UI (ce que l'utilisateur a saisi)
-      setContractDate(parsed.normalized);
 
       setSignedOk(true);
       setOkMsg("Contrat signé ✅ Un email de confirmation a été envoyé.");
@@ -767,33 +707,6 @@ ${occupantsText}
             </div>
           </div>
 
-          {/* ✅ Date du contrat obligatoire */}
-          <div className="mt-6 rounded-xl border border-slate-200 p-4">
-            <div className="text-xs font-semibold tracking-wide text-slate-500">DATE DU CONTRAT (OBLIGATOIRE)</div>
-
-            <div className="mt-3 grid gap-2 md:grid-cols-2 md:items-center">
-              <input
-                className={disabledInputClass}
-                placeholder="JJ/MM/AAAA *"
-                value={contractDate}
-                onChange={(e) => setContractDate(formatContractDateWhileTyping(e.target.value))}
-                disabled={isSigned}
-                inputMode="numeric"
-              />
-              <div className="text-sm text-slate-600">
-                Cette date sera affichée dans la ligne : <span className="font-semibold">“Fait à Carcès, le …”</span>
-              </div>
-            </div>
-
-            {!isSigned && contractDate.trim() ? (
-              parseContractDateFR(contractDate).ok ? null : (
-                <div className="mt-2 text-xs text-amber-700">
-                  Format attendu : JJ/MM/AAAA (ou JJMMAAAA) — ex : 03/02/2026
-                </div>
-              )
-            ) : null}
-          </div>
-
           <div className="mt-6 rounded-xl border border-slate-200 p-4">
             <div className="text-xs font-semibold tracking-wide text-slate-500">CONTRAT (À LIRE)</div>
 
@@ -817,7 +730,9 @@ ${occupantsText}
                       value={o.first_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, first_name: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                     />
@@ -827,7 +742,9 @@ ${occupantsText}
                       value={o.last_name}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, last_name: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                     />
@@ -837,7 +754,9 @@ ${occupantsText}
                       value={o.age}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setOccupants((prev) => prev.map((x, idx) => (idx === i ? { ...x, age: v } : x)));
+                        setOccupants((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, age: v } : x))
+                        );
                       }}
                       disabled={isSigned}
                       inputMode="numeric"
@@ -889,7 +808,9 @@ ${occupantsText}
             </label>
 
             {error ? (
-              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
             ) : null}
 
             {okMsg ? (
