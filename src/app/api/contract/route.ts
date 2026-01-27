@@ -70,26 +70,45 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
-// ✅ Date contrat (JJ/MM/AAAA) : validation stricte + date réelle (pas 31/02)
+// ✅ Date contrat : validation stricte + date réelle (pas 31/02)
+// ✅ Accepte "JJ/MM/AAAA" OU "JJMMAAAA" (utile sur mobile iOS)
 function parseContractDateFR(
   input: string
 ): { ok: true; normalized: string } | { ok: false } {
   const s = mustStr(input);
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
-  if (!m) return { ok: false };
 
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
+  let dd: number;
+  let mm: number;
+  let yyyy: number;
 
-  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return { ok: false };
+  // 1) format avec /
+  const m1 = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (m1) {
+    dd = Number(m1[1]);
+    mm = Number(m1[2]);
+    yyyy = Number(m1[3]);
+  } else {
+    // 2) format compact : on prend uniquement les chiffres
+    const digits = s.replace(/\D/g, "");
+    if (!/^\d{8}$/.test(digits)) return { ok: false };
+    dd = Number(digits.slice(0, 2));
+    mm = Number(digits.slice(2, 4));
+    yyyy = Number(digits.slice(4, 8));
+  }
+
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy))
+    return { ok: false };
   if (yyyy < 1900 || yyyy > 2200) return { ok: false };
   if (mm < 1 || mm > 12) return { ok: false };
   if (dd < 1 || dd > 31) return { ok: false };
 
   // validation calendrier réelle
   const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
-  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) {
+  if (
+    dt.getUTCFullYear() !== yyyy ||
+    dt.getUTCMonth() !== mm - 1 ||
+    dt.getUTCDate() !== dd
+  ) {
     return { ok: false };
   }
 
@@ -101,83 +120,41 @@ function parseContractDateFR(
   return { ok: true, normalized };
 }
 
-// ✅ RIB FIXE (pop-up + emails + contrat)
-const BANK_DETAILS = {
-  beneficiary: "Coralie Laurens",
-  iban: "FR76 2823 3000 0105 5571 3835 979",
-  bic: "REVOFRP2",
-};
-
 /**
- * ✅ Options éventuelles :
- * - si options_total existe (ou alias) -> on l’utilise (source de vérité)
- * - sinon : somme des champs numériques "options" existants,
- *   en excluant les postes non-options (total, base, ménage, taxe, etc.)
+ * ✅ Options éventuelles = somme de TOUTES les options réellement présentes dans pricing,
+ * sans inventer, et sans compter les champs "non-options" (total, taxes, base, etc.)
  */
 function computeOptionsTotalFromPricing(pricing: any): number {
   const p = pricing && typeof pricing === "object" ? pricing : {};
 
-  const direct =
-    pickNumber(p, ["options_total", "extras_total", "addon_total", "add_ons_total"]) ?? null;
-  if (direct != null) return round2(direct);
-
+  // Champs connus "non-options" à EXCLURE de la somme des options
   const excluded = new Set<string>([
-    "currency",
-
-    // totals
     "total",
-    "total_price",
-    "grand_total",
-    "amount_total",
-
-    // base / accommodation
-    "base_accommodation",
-    "base",
-    "base_total",
-    "accommodation",
-    "accommodation_total",
-    "stay",
-    "stay_total",
-    "lodging",
-    "lodging_total",
-
-    // cleaning
     "cleaning",
-    "cleaning_fee",
-    "cleaningFee",
-    "menage",
-
-    // tax
     "tourist_tax",
-    "taxe_sejour",
-    "taxe_de_sejour",
-    "city_tax",
-    "local_tax",
     "tax",
     "taxes",
-
-    // other non-option metadata
+    "base",
+    "base_accommodation",
+    "accommodation",
+    "accommodation_total",
     "subtotal",
     "nights",
     "nightly_rate",
     "rate",
     "adults",
     "children",
-
-    // avoid double count if present
-    "options_total",
-    "extras_total",
-    "addon_total",
-    "add_ons_total",
-    "extras",
-    "options",
+    "currency",
   ]);
 
   let sum = 0;
+
   for (const [k, v] of Object.entries(p)) {
     if (excluded.has(k)) continue;
+
     const n = Number(v);
     if (!Number.isFinite(n)) continue;
+
     sum += n;
   }
 
@@ -210,10 +187,6 @@ function buildFullContractText(args: {
   occupantsText: string;
 
   signatureDate: string; // ✅ date SAISIE par le locataire (JJ/MM/AAAA)
-
-  bankBeneficiary: string;
-  bankIban: string;
-  bankBic: string;
 }) {
   const {
     ownerName,
@@ -236,9 +209,6 @@ function buildFullContractText(args: {
     address,
     occupantsText,
     signatureDate,
-    bankBeneficiary,
-    bankIban,
-    bankBic,
   } = args;
 
   const nights = nightsBetween(arrivalYmd, departureYmd);
@@ -275,9 +245,9 @@ Capacité maximale : 8 personnes (voir Article 11).
 Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
 
 Annexes (faisant partie intégrante du contrat) :
-Annexe 1 : État descriptif du logement (repris du site)
-Annexe 2 : Inventaire / liste équipements (repris du site)
-Annexe 3 : Règlement intérieur (repris et signé)
+Annexe 1 : État descriptif du logement
+Annexe 2 : Inventaire / liste équipements
+Annexe 3 : Règlement intérieur (à signer)
 Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
 
 3) Durée — Dates — Horaires
@@ -300,13 +270,10 @@ Taxe de séjour : ${touristTax || "[____ €]"} (si applicable / selon règles l
 Mode de paiement : virement bancaire uniquement.
 Aucun paiement par chèque n’est accepté.
 
-RIB (virement bancaire)
-Bénéficiaire : ${bankBeneficiary}
-IBAN : ${bankIban}
-BIC : ${bankBic}
-
 5.1 Acompte (30%)
-Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${deposit30 || "[____ €]"}.
+Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${
+    deposit30 || "[____ €]"
+  }.
 ✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
 
 5.2 Solde
@@ -340,7 +307,7 @@ En cas d’annulation par le propriétaire (hors force majeure), celui-ci rembou
 Aucune indemnité forfaitaire supplémentaire n’est due.
 
 10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêché par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
+Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
 
 11) État des lieux — Ménage — Entretien
 Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
@@ -394,81 +361,9 @@ Le Locataire (signature précédée de la mention “Lu et approuvé”) :
 
 ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
 
-- Logement entier (bergerie)
-- Capacité : 8 personnes
-- Extérieurs : jardin / terrasse, espace repas extérieur, barbecue/plancha, transats
-- Piscine privée (avec alarme) + petit bassin naturel
-- Stationnement gratuit sur place (parking)
-- Accès : arrivée autonome possible (selon modalités), accès par chemin privé
-- Connexion Internet : Starlink (maxi vitesse par satellite)
-- Chauffage : poêle à bois + chauffage
-- Sécurité : détecteur de fumée, détecteur de monoxyde de carbone, extincteur
-
 ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
 
-SALLE DE BAIN
-- 2 sèche-cheveux
-- 2 douches à l’italienne
-- Machine à laver
-- Produits de nettoyage
-- Shampooing, savon pour le corps, gel douche
-- Eau chaude
-
-CHAMBRE & LINGE
-- Équipements de base (serviettes, draps, savon, papier toilette)
-- Grand dressing, cintres
-- Draps, couettes, couvertures supplémentaires
-- 4 oreillers par lit + traversins
-- Tables de nuit, lampes de chevet, stores
-- Fer à repasser, étendoir à linge, moustiquaire
-- Espace de rangement pour vêtements
-
-CUISINE & REPAS
-- Cuisine équipée : plaque de cuisson, four, micro-ondes, réfrigérateur, congélateur
-- Lave-vaisselle
-- Ustensiles de cuisine, casseroles, poêles
-- Vaisselle, verres, couverts
-- Cafetière à filtre
-
-EXTÉRIEUR
-- Mobilier extérieur (table/chaises), transats
-- Barbecue / plancha
-
 ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-
-Informations importantes à lire avant signature du contrat
-(merci de lire attentivement et de valider ces points)
-Ce sera un plaisir de vous accueillir 😀
-▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
-▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
-⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
-‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
-🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
-🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
-🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
-❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
-🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
-❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
-🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
-🚮 Poubelles : à emporter à votre départ
-🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
-✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
-📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
-🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
-❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
-🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
-🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
-🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
-✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
-🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
-🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
-🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
-📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
-📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).
-
-
-Signature du locataire (Annexe 3 — “Lu et approuvé”) :
-[____________________]
 
 ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
 (À signer sur place.)
@@ -543,11 +438,14 @@ export async function POST(req: Request) {
   const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
   const acceptedTerms = Boolean(body?.accepted_terms);
 
-  // ✅ NOUVEAU : date du contrat obligatoire (JJ/MM/AAAA)
+  // ✅ NOUVEAU : date du contrat obligatoire (JJ/MM/AAAA ou JJMMAAAA)
   const contractDateRaw = mustStr(body?.contract_date);
   const parsedContractDate = parseContractDateFR(contractDateRaw);
   if (!parsedContractDate.ok) {
-    return jsonError("Merci de renseigner la date du contrat au format JJ/MM/AAAA.", 400);
+    return jsonError(
+      "Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).",
+      400
+    );
   }
   const contractDate = parsedContractDate.normalized;
 
@@ -622,7 +520,9 @@ export async function POST(req: Request) {
   // ✅ Email : contrat complet avec montants auto-remplis
   const resend = requireResend();
   const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}` : "";
+  const contractUrl = baseUrl
+    ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}`
+    : "";
 
   const arrivalYmd = String(booking.start_date || "").trim();
   const departureYmd = String(booking.end_date || "").trim();
@@ -630,32 +530,19 @@ export async function POST(req: Request) {
   const p = booking?.pricing || {};
 
   // ✅ Source de vérité : total si présent
-  const totalN = pickNumber(p, ["total", "total_price", "grand_total", "amount_total"]) ?? null;
+  const totalN = pickNumber(p, ["total"]) ?? null;
 
   // ✅ Forfait ménage fixe : 100€
   const cleaningN = 100;
 
   // ✅ Taxe de séjour si présente
-  const touristTaxN =
-    pickNumber(p, ["tourist_tax", "taxe_sejour", "taxe_de_sejour", "city_tax", "local_tax"]) ?? 0;
+  const touristTaxN = pickNumber(p, ["tourist_tax"]) ?? 0;
 
-  // ✅ Options : conforme à la règle anti-double comptage
+  // ✅ Options = somme de toutes les clés options présentes dans pricing (sans inventer)
   const optionsN = computeOptionsTotalFromPricing(p);
 
   // ✅ Hébergement : champ direct si présent, sinon déduit du total (si total présent)
-  let accommodationN =
-    pickNumber(p, [
-      "base_accommodation",
-      "base",
-      "base_total",
-      "accommodation",
-      "accommodation_total",
-      "stay",
-      "stay_total",
-      "lodging",
-      "lodging_total",
-    ]) ?? null;
-
+  let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
     accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
@@ -665,7 +552,9 @@ export async function POST(req: Request) {
   const deposit30N = totalN != null ? round2(totalN * 0.3) : null;
   const soldeN = totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
 
-  const addressText = `${addressLine1}${addressLine2 ? `, ${addressLine2}` : ""}, ${postalCode} ${city}, ${country}`;
+  const addressText = `${addressLine1}${
+    addressLine2 ? `, ${addressLine2}` : ""
+  }, ${postalCode} ${city}, ${country}`;
 
   const occupantsText = normOccupants
     .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
@@ -700,36 +589,32 @@ export async function POST(req: Request) {
     occupantsText,
     // ✅ Date saisie (obligatoire)
     signatureDate: contractDate,
-
-    // ✅ RIB FIXE
-    bankBeneficiary: BANK_DETAILS.beneficiary,
-    bankIban: BANK_DETAILS.iban,
-    bankBic: BANK_DETAILS.bic,
   });
 
   const subjectOwner = `Contrat signé — Demande #${rid}`;
 
-  const bankHtml = `
-    <div style="margin:12px 0;padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb">
-      <div style="font-weight:700;margin-bottom:6px">RIB (virement bancaire)</div>
-      <div><b>Bénéficiaire :</b> ${escapeHtml(BANK_DETAILS.beneficiary)}</div>
-      <div><b>IBAN :</b> ${escapeHtml(BANK_DETAILS.iban)}</div>
-      <div><b>BIC :</b> ${escapeHtml(BANK_DETAILS.bic)}</div>
-    </div>
-  `;
-
   const htmlOwner = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
       <h2>${escapeHtml(subjectOwner)}</h2>
-      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)} — ${escapeHtml(booking.phone || "")}</p>
-      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(formatDateFR(departureYmd))} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
-      ${totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""}
+      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(
+    booking.email
+  )} — ${escapeHtml(booking.phone || "")}</p>
+      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(
+    formatDateFR(departureYmd)
+  )} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
+      ${
+        totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""
+      }
       <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
-      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(/\n/g, "<br/>")}</p>
-      ${bankHtml}
+      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(
+        /\n/g,
+        "<br/>"
+      )}</p>
       ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
       <hr/>
-      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
+      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
+        contractText
+      )}</pre>
     </div>
   `;
 
@@ -754,11 +639,11 @@ export async function POST(req: Request) {
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
         <h2>Merci ! Votre contrat est signé ✅</h2>
         <p>Vous pouvez conserver ce message comme preuve.</p>
-        ${bankHtml}
         ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
         <hr/>
-        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(contractText)}</pre>
-        <p style="margin-top:16px">Très cordialement<br/>Laurens Coralie</p>
+        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
+          contractText
+        )}</pre>
       </div>
     `,
   });
@@ -771,6 +656,6 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
+    .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
