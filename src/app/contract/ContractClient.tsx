@@ -71,7 +71,7 @@ function toMoneyEUR(v: any): string {
 function pickNumber(obj: any, keys: string[]): number | null {
   const o = obj || {};
   for (const k of keys) {
-    const v = o?.[k];
+    const v = (o as any)?.[k];
     const n = Number(v);
     if (Number.isFinite(n)) return n;
   }
@@ -154,6 +154,10 @@ function formatContractDateWhileTyping(value: string): string {
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 }
 
+function formatOtpWhileTyping(value: string): string {
+  return String(value || "").replace(/\D/g, "").slice(0, 6);
+}
+
 export default function ContractClient({ booking, token, existing }: Props) {
   // ✅ Coordonnées propriétaire FIXES
   const OWNER = useMemo(
@@ -192,7 +196,13 @@ export default function ContractClient({ booking, token, existing }: Props) {
 
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+
+  // ✅ Flow OTP
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+
   const [signedOk, setSignedOk] = useState(false);
 
   // ✅ date figée au moment de la signature (si on vient de signer sans reload)
@@ -969,50 +979,58 @@ ${occupantsText}
     });
   }
 
-  async function onSubmit() {
+  function validateBeforeSendOrVerify(): { ok: true; contractDate: string } | { ok: false } {
     setError(null);
     setOkMsg(null);
 
-    if (isSigned) return;
+    if (isSigned) return { ok: false };
 
     if (!addressLine1.trim() || !postalCode.trim() || !city.trim() || !country.trim()) {
       setError("Adresse incomplète.");
-      return;
+      return { ok: false };
     }
 
     // ✅ date de contrat obligatoire (saisie manuelle)
     const parsed = parseContractDateFR(contractDate);
     if (!parsed.ok) {
       setError("Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).");
-      return;
+      return { ok: false };
     }
 
     if (!acceptedTerms) {
       setError("Vous devez accepter le contrat.");
-      return;
+      return { ok: false };
     }
 
     if (occupants.length < 1) {
       setError("Ajoutez au moins une personne (nom, prénom, âge).");
-      return;
+      return { ok: false };
     }
 
     if (occupants.length > maxOccupants) {
       setError(`Maximum ${maxOccupants} personne(s).`);
-      return;
+      return { ok: false };
     }
 
     if (!allOccupantsFilled) {
       setError("Merci de renseigner nom, prénom et âge pour chaque personne.");
-      return;
+      return { ok: false };
     }
 
-    setSubmitting(true);
+    return { ok: true, contractDate: parsed.normalized };
+  }
+
+  async function sendOtp() {
+    const v = validateBeforeSendOrVerify();
+    if (!v.ok) return;
+
+    setSendingOtp(true);
     try {
       const res = await fetch("/api/contract", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          action: "send_otp",
           rid: booking.id,
           t: token,
           signer_address_line1: addressLine1,
@@ -1022,16 +1040,61 @@ ${occupantsText}
           signer_country: country,
           occupants,
           accepted_terms: true,
-
-          // ✅ date saisie, normalisée JJ/MM/AAAA
-          contract_date: parsed.normalized,
+          contract_date: v.contractDate,
         }),
       });
 
       const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.ok) {
-        setError(json?.error || "Erreur lors de la signature.");
+        setError(json?.error || "Erreur lors de l’envoi du code.");
+        return;
+      }
+
+      setOtpSent(true);
+      setOkMsg("Code envoyé ✅ Vérifiez votre email puis saisissez le code à 6 chiffres.");
+    } catch {
+      setError("Erreur réseau. Réessayez.");
+    } finally {
+      setSendingOtp(false);
+    }
+  }
+
+  async function verifyOtp() {
+    const v = validateBeforeSendOrVerify();
+    if (!v.ok) return;
+
+    const cleaned = formatOtpWhileTyping(otpCode);
+    if (cleaned.length !== 6) {
+      setError("Saisissez le code à 6 chiffres.");
+      return;
+    }
+
+    setVerifyingOtp(true);
+    try {
+      const res = await fetch("/api/contract", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "verify_otp",
+          rid: booking.id,
+          t: token,
+          otp_code: cleaned,
+          signer_address_line1: addressLine1,
+          signer_address_line2: addressLine2,
+          signer_postal_code: postalCode,
+          signer_city: city,
+          signer_country: country,
+          occupants,
+          accepted_terms: true,
+          contract_date: v.contractDate,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || !json?.ok) {
+        setError(json?.error || "Code invalide. Réessayez.");
         return;
       }
 
@@ -1043,16 +1106,21 @@ ${occupantsText}
       }
 
       // ✅ fige aussi la date de contrat côté UI
-      setContractDate(parsed.normalized);
+      setContractDate(v.contractDate);
 
       setSignedOk(true);
       setOkMsg("Contrat signé ✅ Un email de confirmation a été envoyé.");
     } catch {
       setError("Erreur réseau. Réessayez.");
     } finally {
-      setSubmitting(false);
+      setVerifyingOtp(false);
     }
   }
+
+  const signedDateFR = useMemo(() => {
+    if (signedDateLocal) return signedDateLocal;
+    return signedDateFRFromIso(existing?.signed_at) || null;
+  }, [signedDateLocal, existing?.signed_at]);
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -1060,6 +1128,11 @@ ${occupantsText}
         <div className="mx-auto max-w-6xl px-6 py-10">
           <div className="text-white/80 text-sm">Superbe bergerie • Contrat de location</div>
           <h1 className="mt-2 text-3xl font-semibold text-white">Contrat de location saisonnière</h1>
+          {isSigned && (
+            <div className="mt-3 text-white/80 text-sm">
+              Contrat signé {signedDateFR ? `le ${signedDateFR}` : ""} ✅
+            </div>
+          )}
         </div>
       </div>
 
@@ -1279,14 +1352,45 @@ ${occupantsText}
               </div>
             ) : null}
 
-            <button
-              type="button"
-              onClick={onSubmit}
-              disabled={isSigned || submitting}
-              className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {submitting ? "Envoi..." : "Signer et envoyer le contrat"}
-            </button>
+            {/* ✅ Étape 1 : envoyer le code */}
+            {!isSigned ? (
+              <button
+                type="button"
+                onClick={sendOtp}
+                disabled={sendingOtp || verifyingOtp}
+                className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sendingOtp ? "Envoi du code..." : otpSent ? "Renvoyer le code (6 chiffres)" : "Recevoir un code de signature (6 chiffres)"}
+              </button>
+            ) : null}
+
+            {/* ✅ Étape 2 : saisir + vérifier */}
+            {!isSigned && otpSent ? (
+              <div className="mt-4 rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-900">Code reçu par email</div>
+                <div className="mt-2 grid gap-3 md:grid-cols-2 md:items-center">
+                  <input
+                    className={disabledInputClass}
+                    placeholder="Code (6 chiffres) *"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(formatOtpWhileTyping(e.target.value))}
+                    inputMode="numeric"
+                    disabled={verifyingOtp || sendingOtp}
+                  />
+                  <button
+                    type="button"
+                    onClick={verifyOtp}
+                    disabled={verifyingOtp || sendingOtp}
+                    className="inline-flex items-center justify-center rounded-xl bg-emerald-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {verifyingOtp ? "Vérification..." : "Confirmer la signature"}
+                  </button>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Le code est valable environ 10 minutes. Si besoin, cliquez sur “Renvoyer le code”.
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-2 text-xs text-slate-500">
               En signant, vous ne pouvez pas modifier les dates, tarifs ou informations clés de la réservation.
