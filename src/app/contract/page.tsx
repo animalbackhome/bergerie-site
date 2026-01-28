@@ -309,7 +309,7 @@ export default async function ContractPage(props: PageProps) {
     <ContractClient
       booking={booking as any}
       token={t}
-      existing={(existing as any) || null}[]
+      existing={(existing as any) || null}
     />
   );
 }
