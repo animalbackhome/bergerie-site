@@ -985,6 +985,12 @@ ${occupantsText}
 
     if (isSigned) return { ok: false };
 
+    // ✅ le lien doit contenir un token (t=...) pour autoriser la signature
+    if (!String(token || "").trim()) {
+      setError("Lien invalide : token manquant. Merci d’ouvrir le lien reçu par email (ou de redemander le lien).");
+      return { ok: false };
+    }
+
     if (!addressLine1.trim() || !postalCode.trim() || !city.trim() || !country.trim()) {
       setError("Adresse incomplète.");
       return { ok: false };
@@ -1342,6 +1348,15 @@ ${occupantsText}
               <span>J’ai lu et j’accepte le contrat. Je certifie que les informations sont exactes.</span>
             </label>
 
+            <div className="mt-3 text-sm text-slate-700">
+              <div className="font-semibold">Pourquoi un code de signature ?</div>
+              <div className="mt-1 text-slate-600">
+                Pour confirmer que la personne qui signe a bien accès à l’email utilisé pour la réservation,
+                nous envoyons un <span className="font-semibold">code unique à 6 chiffres</span>.
+                Cela évite qu’un tiers signe à votre place.
+              </div>
+            </div>
+
             {error ? (
               <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             ) : null}
@@ -1357,11 +1372,17 @@ ${occupantsText}
               <button
                 type="button"
                 onClick={sendOtp}
-                disabled={sendingOtp || verifyingOtp}
+                disabled={!String(token || "").trim() || sendingOtp || verifyingOtp}
                 className="mt-4 inline-flex items-center justify-center rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {sendingOtp ? "Envoi du code..." : otpSent ? "Renvoyer le code (6 chiffres)" : "Recevoir un code de signature (6 chiffres)"}
               </button>
+            ) : null}
+
+            {!isSigned && !String(token || "").trim() ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Signature désactivée : lien sans token. Utilisez le lien envoyé par email (il contient <b>t=...</b>).
+              </div>
             ) : null}
 
             {/* ✅ Étape 2 : saisir + vérifier */}
