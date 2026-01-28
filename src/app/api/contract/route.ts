@@ -10,6 +10,23 @@ import {
   requireResend,
 } from "@/lib/resendServer";
 import { verifyContractToken } from "@/lib/contractToken";
+import crypto from "crypto";
+
+/**
+ * IMPORTANT
+ * - On garde UNE SEULE route : /api/contract
+ * - On ne touche pas aux autres routes / emails existants
+ *
+ * Flow OTP email (6 chiffres) :
+ * 1) action=send_otp  -> upsert infos contrat (sans signed_at) + envoi OTP par email
+ * 2) action=verify_otp -> vérifie OTP + set signed_at + email post-signature (RIB + annexe 3 + bouton "virement envoyé")
+ * 3) action=transfer_sent -> enregistre "virement envoyé" (si colonne existe), sinon no-op + notifie propriétaire
+ *
+ * ⚠️ NOTE DB
+ * - Cette implémentation ne nécessite PAS de table OTP dédiée.
+ * - OTP est "stateless" (dérivé HMAC + fenêtre temps) : pas de colonne à ajouter.
+ * - Pour tracer légalement + finement (attempts, expiry, etc.), on pourra ajouter des colonnes plus tard.
+ */
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ ok: false, error: message }, { status });
@@ -145,242 +162,114 @@ function computeOptionsTotalFromPricing(pricing: any): number {
     "adults",
     "children",
     "currency",
+    "options_total", // on le gère à part
   ]);
 
-  let sum = 0;
+  // ✅ si options_total est présent, on le respecte
+  const direct = Number((p as any).options_total);
+  if (Number.isFinite(direct)) return round2(direct);
 
+  let sum = 0;
   for (const [k, v] of Object.entries(p)) {
     if (excluded.has(k)) continue;
-
     const n = Number(v);
     if (!Number.isFinite(n)) continue;
-
     sum += n;
   }
-
   return round2(sum);
 }
 
-function buildFullContractText(args: {
-  ownerName: string;
-  ownerAddress: string;
-  ownerEmail: string;
-  ownerPhone: string;
-  propertyAddress: string;
-
-  fullName: string;
-  email: string;
-  phone: string;
-
-  arrivalYmd: string;
-  departureYmd: string;
-
-  totalN: number | null;
-  accommodationN: number | null;
-  cleaningN: number; // fixe: 100
-  optionsN: number;
-  touristTaxN: number;
-  deposit30N: number | null;
-  soldeN: number | null;
-
-  address: string;
-  occupantsText: string;
-
-  signatureDate: string; // ✅ date SAISIE par le locataire (JJ/MM/AAAA)
-}) {
-  const {
-    ownerName,
-    ownerAddress,
-    ownerEmail,
-    ownerPhone,
-    propertyAddress,
-    fullName,
-    email,
-    phone,
-    arrivalYmd,
-    departureYmd,
-    totalN,
-    accommodationN,
-    cleaningN,
-    optionsN,
-    touristTaxN,
-    deposit30N,
-    soldeN,
-    address,
-    occupantsText,
-    signatureDate,
-  } = args;
-
-  const nights = nightsBetween(arrivalYmd, departureYmd);
-
-  const totalPrice = totalN != null ? toMoneyEUR(totalN) : "";
-  const accommodation = accommodationN != null ? toMoneyEUR(accommodationN) : "";
-  const cleaning = toMoneyEUR(cleaningN);
-  const options = toMoneyEUR(optionsN);
-  const touristTax = toMoneyEUR(touristTaxN);
-  const deposit30 = deposit30N != null ? toMoneyEUR(deposit30N) : "";
-  const solde = soldeN != null ? toMoneyEUR(soldeN) : "";
-
-  return `CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS —
-
-1) Parties
-Propriétaire (Bailleur)
-Nom / Prénom : ${ownerName}
-Adresse : ${ownerAddress}
-E-mail : ${ownerEmail}
-Téléphone : ${ownerPhone}
-
-Locataire
-Nom / Prénom : ${fullName || "[]"}
-Adresse : ${address || "[Adresse à compléter]"}
-E-mail : ${email || "[]"}
-Téléphone : ${phone || "[]"}
-
-Le locataire déclare être majeur et avoir la capacité de contracter.
-
-2) Logement loué
-Désignation : Location saisonnière meublée
-Adresse du logement : ${propertyAddress}
-Capacité maximale : 8 personnes (voir Article 11).
-Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.
-
-Annexes (faisant partie intégrante du contrat) :
-Annexe 1 : État descriptif du logement
-Annexe 2 : Inventaire / liste équipements
-Annexe 3 : Règlement intérieur (à signer)
-Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)
-
-3) Durée — Dates — Horaires
-Période : du ${formatDateFR(arrivalYmd)} au ${formatDateFR(departureYmd)} pour ${nights} nuits.
-Horaires standard
-Arrivée (check-in) : entre 16h et 18h
-Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)
-Options (si accord préalable et selon disponibilités) :
-Arrivée début de journée : +70€
-Départ fin de journée : +70€
-
-4) Prix — Taxes — Prestations
-Prix total du séjour : ${totalPrice || "[____ €]"} comprenant :
-Hébergement : ${accommodation || "[____ €]"}
-Forfait ménage : ${cleaning || "100€"}
-Options éventuelles : ${options || "[____ €]"}
-Taxe de séjour : ${touristTax || "[____ €]"} (si applicable / selon règles locales)
-
-5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)
-Mode de paiement : virement bancaire uniquement.
-Aucun paiement par chèque n’est accepté.
-
-5.1 Acompte (30%)
-Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit ${
-    deposit30 || "[____ €]"
-  }.
-✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.
-
-5.2 Solde
-Le solde, soit ${solde || "[____ €]"}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.
-À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de relance, le propriétaire pourra considérer la réservation comme annulée par le locataire, l’acompte restant acquis au propriétaire.
-
-6) Formation du contrat — Réservation
-La réservation devient effective dès réception :
-du présent contrat signé, et
-de l’acompte de 30%.
-Le solde reste exigible selon l’Article 5.2.
-
-7) Absence de droit de rétractation
-Le locataire est informé que, pour une prestation d’hébergement fournie à une date déterminée, il ne bénéficie pas d’un droit de rétractation.
-➡️ Les conditions d’annulation applicables sont celles prévues à l’Article 8.
-
-8) Annulation / Non-présentation / Séjour écourté
-8.1 Annulation par le locataire
-Toute annulation doit être notifiée par écrit (e-mail + recommandé conseillé).
-a) Quel que soit le motif, l’acompte de 30% reste définitivement acquis au propriétaire.
-b) À compter du paiement du solde (J-7 avant l’arrivée), aucun remboursement ne sera effectué, quel que soit le motif d’annulation ou d’empêchement, et le locataire reste redevable de la totalité du séjour.
-c) Si le séjour est écourté, aucun remboursement n’est dû.
-
-8.2 Non-présentation (“no-show”)
-Si le locataire ne se manifeste pas et n’a pas convenu d’une arrivée différée :
-à partir de minuit (00h00) le jour d’arrivée, l’entrée dans les lieux n’est plus possible ;
-si le locataire ne donne aucune nouvelle avant le lendemain 10h, le propriétaire peut considérer la réservation comme annulée, disposer du logement, et conserver les sommes versées (hors taxe de séjour si non due).
-
-9) Annulation par le propriétaire
-En cas d’annulation par le propriétaire (hors force majeure), celui-ci remboursera au locataire l’intégralité des sommes effectivement versées dans un délai de 7 jours.
-Aucune indemnité forfaitaire supplémentaire n’est due.
-
-10) Force majeure
-Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure (événement échappant au contrôle, imprévisible et irrésistible).
-
-11) État des lieux — Ménage — Entretien
-Un état des lieux contradictoire est signé à l’arrivée et au départ (Annexe 4).
-Le ménage de fin de séjour est assuré par le propriétaire dans la limite d’un usage normal.
-Le barbecue/plancha doivent être rendus propres. Les frais de remise en état, nettoyage exceptionnel, ou dégradations peuvent être facturés.
-
-12) Dépôt de garantie (caution) — 500€ (en liquide à l’arrivée)
-Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée.
-Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre :
-dégradations, pertes, casse, nettoyage anormal, non-respect du règlement intérieur.
-En cas de retenue, le propriétaire pourra fournir, selon le cas, photos + devis/factures justifiant la retenue.
-
-13) Identité du locataire
-À l’arrivée, le locataire s’engage à présenter une pièce d’identité au nom de la personne ayant réservé, uniquement pour vérification d’identité.
-Aucun numéro de pièce n’est relevé ni conservé.
-
-14) Capacité — Personnes supplémentaires — Visiteurs
-Capacité maximale : 8 personnes.
-Toute personne supplémentaire non autorisée peut entraîner la résiliation immédiate sans remboursement.
-Supplément : 50€/personne/nuit et 50€/personne en journée (même sans nuitée), selon accord préalable.
-
-15) Animaux
-Animaux acceptés selon conditions.
-Supplément : 10€ par chien et par nuit (à régler à l’arrivée, sauf indication contraire).
-Le locataire s’engage à maintenir la propreté, éviter toute dégradation et ramasser les déjections à l’extérieur.
-
-16) Caméras (information)
-Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs (entrée/accès), à des fins de sécurité.
-Aucune caméra n’est présente à l’intérieur du logement.
-
-17) Assurance
-Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent). Il est conseillé de souscrire une assurance annulation.
-
-18) Utilisation paisible — Règlement intérieur
-Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3), dont la validation conditionne la location.
-
-19) Cession / Sous-location
-La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire. Toute infraction peut entraîner résiliation immédiate sans remboursement.
-
-20) Litiges
-Contrat entre particuliers. En cas de difficulté, les parties recherchent une solution amiable.
-À défaut, le litige relèvera des juridictions compétentes selon les règles de droit commun.
-
-Signatures
-Fait à Carcès, le ${signatureDate || "[date]"}
-En 2 exemplaires.
-Le Propriétaire (signature précédée de la mention “Lu et approuvé”) :
-[____________________]
-Le Locataire (signature précédée de la mention “Lu et approuvé”) :
-[____________________]
-
-ANNEXE 1 — ÉTAT DESCRIPTIF DU LOGEMENT
-
-ANNEXE 2 — INVENTAIRE / LISTE ÉQUIPEMENTS
-
-ANNEXE 3 — RÈGLEMENT INTÉRIEUR (à signer)
-
-ANNEXE 4 — ÉTAT DES LIEUX D’ENTRÉE / SORTIE
-(À signer sur place.)
-
-✅ Structure du contrat
-Le contrat est structuré en articles + annexes, pour être lisible et juridiquement solide.
-
-—
-Personnes présentes pendant la location (nom, prénom, âge)
-${occupantsText}
-`;
+function escapeHtml(s: string) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
+
+/**
+ * OTP "stateless" : code 6 chiffres basé sur une fenêtre de temps (10 min)
+ * + HMAC secret = BOOKING_MODERATION_SECRET
+ * -> pas besoin de stocker en DB.
+ */
+const OTP_WINDOW_SEC = 10 * 60;
+
+function otpSecret(): string {
+  // si secret absent, on génère un "secret" faible pour éviter crash
+  // (mais idéalement BOOKING_MODERATION_SECRET doit être défini en prod)
+  const s = String(BOOKING_MODERATION_SECRET || "").trim();
+  return s || "MISSING_BOOKING_MODERATION_SECRET";
+}
+
+function otpWindow(nowSec: number) {
+  return Math.floor(nowSec / OTP_WINDOW_SEC);
+}
+
+function computeOtpCode(args: { rid: string; email: string; window: number }) {
+  const h = crypto.createHmac("sha256", otpSecret());
+  h.update(`${args.rid}.${String(args.email || "").toLowerCase().trim()}.${args.window}`);
+  const digest = h.digest();
+  // prendre 4 octets -> number -> 6 digits
+  const n = digest.readUInt32BE(0);
+  const code = String(n % 1_000_000).padStart(6, "0");
+  return code;
+}
+
+function verifyOtpCode(args: { rid: string; email: string; code: string }) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const w = otpWindow(nowSec);
+  const cleaned = String(args.code || "").replace(/\D/g, "").slice(0, 6);
+  if (cleaned.length !== 6) return false;
+
+  // ✅ accepte fenêtre courante + précédente (tolérance)
+  const c1 = computeOtpCode({ rid: args.rid, email: args.email, window: w });
+  const c2 = computeOtpCode({ rid: args.rid, email: args.email, window: w - 1 });
+  return cleaned === c1 || cleaned === c2;
+}
+
+/**
+ * Lien signé "transfer sent" pour bouton email
+ */
+function signTransferLink(args: { rid: string; email: string; token: string }) {
+  const h = crypto.createHmac("sha256", otpSecret());
+  h.update(`transfer.${args.rid}.${String(args.email || "").toLowerCase().trim()}.${args.token}`);
+  return h.digest("hex").slice(0, 32);
+}
+
+function verifyTransferLink(args: { rid: string; email: string; token: string; k: string }) {
+  const expected = signTransferLink({ rid: args.rid, email: args.email, token: args.token });
+  return String(args.k || "") === expected;
+}
+
+function baseUrl() {
+  return SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
+}
+
+/**
+ * ANNEXE 3 : on la met dans l'email post-signature.
+ * ➜ Ici : PLACEHOLDER (car ton annexe 3 complète est déjà dans ContractClient).
+ * Si tu veux 100% identique, tu me colles ton fichier PaiementSection.tsx et/ou
+ * on met Annexe3 dans un fichier partagé côté serveur.
+ */
+const ANNEXE3_TEXT = `ANNEXE 3 — RÈGLEMENT INTÉRIEUR
+(voir le contrat en ligne : annexe 3 incluse en bas du contrat)`;
+
+/**
+ * RIB : PLACEHOLDER (à remplacer par ton texte exact de PaiementSection.tsx)
+ * -> tu m'envoies le fichier PaiementSection.tsx et je l'injecte à l'identique.
+ */
+const RIB_TEXT = `RIB (VIREMENT BANCAIRE) — à compléter
+IBAN : [IBAN]
+BIC : [BIC]
+Titulaire : [Nom / Titulaire]`;
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const rid = normalizeRid(searchParams.get("rid"));
   const t = searchParams.get("t") || "";
+  const action = mustStr(searchParams.get("action") || "");
+  const k = mustStr(searchParams.get("k") || "");
 
   if (!rid) return jsonError("Missing rid", 400);
 
@@ -405,6 +294,61 @@ export async function GET(req: Request) {
   });
   if (!okToken) return jsonError("Invalid token", 403);
 
+  // ✅ Action "transfer_sent" via bouton email (GET signé)
+  if (action === "transfer_sent") {
+    const okK = verifyTransferLink({ rid, email: booking.email, token: t, k });
+    if (!okK) return jsonError("Invalid link", 403);
+
+    // best-effort: si colonnes n'existent pas, on ignore sans casser
+    try {
+      await supabase
+        .from("booking_contracts")
+        .update({
+          transfer_declared_at: new Date().toISOString(),
+          transfer_declared: true,
+        } as any)
+        .eq("booking_request_id", rid);
+    } catch {
+      // ignore
+    }
+
+    // notif propriétaire
+    const resend = requireResend();
+    const recipientsOwner = BOOKING_NOTIFY_EMAIL ? [BOOKING_NOTIFY_EMAIL] : [];
+    if (recipientsOwner.length) {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: recipientsOwner,
+        replyTo: BOOKING_REPLY_TO || undefined,
+        subject: `Virement déclaré envoyé (30%) — Demande #${rid}`,
+        html: `
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+            <h2>Virement déclaré envoyé (30%)</h2>
+            <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)}</p>
+            <p><b>Demande</b> : #${escapeHtml(rid)}</p>
+            <p>Le locataire a cliqué : <b>“J’ai bien envoyé le virement des 30%”</b>.</p>
+            <p>⚠️ À vérifier sur ton compte bancaire.</p>
+          </div>
+        `,
+      });
+    }
+
+    // page simple
+    const url = `${baseUrl()}/contract?rid=${encodeURIComponent(rid)}&t=${encodeURIComponent(t)}`;
+    return new NextResponse(
+      `
+      <!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+      <title>Confirmation</title></head>
+      <body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45;padding:24px;">
+        <h2>Merci ✅</h2>
+        <p>Votre confirmation a été enregistrée.</p>
+        <p><a href="${url}">Retour au contrat</a></p>
+      </body></html>
+      `,
+      { headers: { "content-type": "text/html; charset=utf-8" } }
+    );
+  }
+
   const { data: contract, error: cErr } = await supabase
     .from("booking_contracts")
     .select(
@@ -426,50 +370,11 @@ export async function POST(req: Request) {
     return jsonError("Invalid JSON", 400);
   }
 
+  const action = mustStr(body?.action || "");
   const rid = normalizeRid(mustStr(body?.rid));
   const t = mustStr(body?.t);
+
   if (!rid) return jsonError("Missing rid", 400);
-
-  const addressLine1 = mustStr(body?.signer_address_line1);
-  const addressLine2 = mustStr(body?.signer_address_line2);
-  const postalCode = mustStr(body?.signer_postal_code);
-  const city = mustStr(body?.signer_city);
-  const country = mustStr(body?.signer_country);
-  const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
-  const acceptedTerms = Boolean(body?.accepted_terms);
-
-  // ✅ NOUVEAU : date du contrat obligatoire (JJ/MM/AAAA ou JJMMAAAA)
-  const contractDateRaw = mustStr(body?.contract_date);
-  const parsedContractDate = parseContractDateFR(contractDateRaw);
-  if (!parsedContractDate.ok) {
-    return jsonError(
-      "Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).",
-      400
-    );
-  }
-  const contractDate = parsedContractDate.normalized;
-
-  if (!addressLine1 || !postalCode || !city || !country) {
-    return jsonError("Adresse incomplète.", 400);
-  }
-  if (!acceptedTerms) {
-    return jsonError("Vous devez accepter le contrat.", 400);
-  }
-
-  const normOccupants = occupants
-    .map((o: any) => ({
-      first_name: mustStr(o?.first_name),
-      last_name: mustStr(o?.last_name),
-      age: mustStr(o?.age),
-    }))
-    .filter((o: any) => o.first_name && o.last_name && o.age);
-
-  if (normOccupants.length === 0) {
-    return jsonError("Ajoutez au moins une personne (nom, prénom, âge).", 400);
-  }
-  if (normOccupants.length > 8) {
-    return jsonError("Maximum 8 personnes.", 400);
-  }
 
   const supabase = requireSupabaseAdmin();
 
@@ -490,6 +395,48 @@ export async function POST(req: Request) {
   });
   if (!okToken) return jsonError("Invalid token", 403);
 
+  // --- common validated fields (for saving contract draft) ---
+  const addressLine1 = mustStr(body?.signer_address_line1);
+  const addressLine2 = mustStr(body?.signer_address_line2);
+  const postalCode = mustStr(body?.signer_postal_code);
+  const city = mustStr(body?.signer_city);
+  const country = mustStr(body?.signer_country);
+  const occupants = Array.isArray(body?.occupants) ? body.occupants : [];
+  const acceptedTerms = Boolean(body?.accepted_terms);
+
+  // ✅ date du contrat obligatoire (JJ/MM/AAAA ou JJMMAAAA)
+  const contractDateRaw = mustStr(body?.contract_date);
+  const parsedContractDate = parseContractDateFR(contractDateRaw);
+  if (!parsedContractDate.ok) {
+    return jsonError(
+      "Merci de renseigner la date du contrat au format JJ/MM/AAAA (ou JJMMAAAA).",
+      400
+    );
+  }
+  const contractDate = parsedContractDate.normalized;
+
+  const normOccupants = occupants
+    .map((o: any) => ({
+      first_name: mustStr(o?.first_name),
+      last_name: mustStr(o?.last_name),
+      age: mustStr(o?.age),
+    }))
+    .filter((o: any) => o.first_name && o.last_name && o.age);
+
+  if (!addressLine1 || !postalCode || !city || !country) {
+    return jsonError("Adresse incomplète.", 400);
+  }
+  if (!acceptedTerms) {
+    return jsonError("Vous devez accepter le contrat.", 400);
+  }
+  if (normOccupants.length === 0) {
+    return jsonError("Ajoutez au moins une personne (nom, prénom, âge).", 400);
+  }
+  if (normOccupants.length > 8) {
+    return jsonError("Maximum 8 personnes.", 400);
+  }
+
+  // ✅ Save draft (upsert) — sans marquer signed_at
   const { data: saved, error: upErr } = await supabase
     .from("booking_contracts")
     .upsert(
@@ -501,161 +448,219 @@ export async function POST(req: Request) {
         signer_city: city,
         signer_country: country,
         occupants: normOccupants,
-
-        // ✅ NOUVEAU : sauvegarde en base
         contract_date: contractDate,
-
         ip: req.headers.get("x-forwarded-for") || null,
         user_agent: req.headers.get("user-agent") || null,
-      },
+      } as any,
       { onConflict: "booking_request_id" }
     )
-    .select(
-      "id, booking_request_id, signed_at, signer_address_line1, signer_address_line2, signer_postal_code, signer_city, signer_country, occupants, contract_date"
-    )
+    .select("id, booking_request_id, signed_at, contract_date")
     .single();
 
   if (upErr) return jsonError(upErr.message, 500);
 
-  // ✅ Email : contrat complet avec montants auto-remplis
-  const resend = requireResend();
-  const baseUrl = SITE_URL ? SITE_URL.replace(/\/$/, "") : "";
-  const contractUrl = baseUrl
-    ? `${baseUrl}/contract?rid=${rid}&t=${encodeURIComponent(t)}`
-    : "";
-
-  const arrivalYmd = String(booking.start_date || "").trim();
-  const departureYmd = String(booking.end_date || "").trim();
-
+  // --- pricing recap (for deposit) ---
   const p = booking?.pricing || {};
-
-  // ✅ Source de vérité : total si présent
   const totalN = pickNumber(p, ["total"]) ?? null;
-
-  // ✅ Forfait ménage fixe : 100€
   const cleaningN = 100;
-
-  // ✅ Taxe de séjour si présente
   const touristTaxN = pickNumber(p, ["tourist_tax"]) ?? 0;
-
-  // ✅ Options = somme de toutes les clés options présentes dans pricing (sans inventer)
   const optionsN = computeOptionsTotalFromPricing(p);
 
-  // ✅ Hébergement : champ direct si présent, sinon déduit du total (si total présent)
   let accommodationN = pickNumber(p, ["base_accommodation", "accommodation"]) ?? null;
   if (accommodationN == null && totalN != null) {
     const computed = totalN - cleaningN - optionsN - touristTaxN;
     accommodationN = Number.isFinite(computed) && computed >= 0 ? round2(computed) : null;
   }
 
-  // ✅ Acompte / solde depuis total (si total présent)
   const deposit30N = totalN != null ? round2(totalN * 0.3) : null;
-  const soldeN = totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
+  const soldeN =
+    totalN != null && deposit30N != null ? round2(totalN - deposit30N) : null;
 
-  const addressText = `${addressLine1}${
-    addressLine2 ? `, ${addressLine2}` : ""
-  }, ${postalCode} ${city}, ${country}`;
+  // --- ACTIONS ---
+  if (action === "send_otp") {
+    const resend = requireResend();
+    const nowSec = Math.floor(Date.now() / 1000);
+    const w = otpWindow(nowSec);
+    const code = computeOtpCode({ rid, email: booking.email, window: w });
 
-  const occupantsText = normOccupants
-    .map((o: any) => `- ${o.first_name} ${o.last_name} (${o.age} ans)`)
-    .join("\n");
-
-  // ✅ Propriétaire & adresse logement FIXES (non dynamiques)
-  const ownerName = "Laurens Coralie";
-  const ownerAddress = "2542 chemin des près neufs 83570 Carcès";
-  const ownerEmail = "laurens-coralie@hotmail.com";
-  const ownerPhone = "0629465295";
-  const propertyAddress = "2542 chemin des près neufs 83570 Carcès";
-
-  const contractText = buildFullContractText({
-    ownerName,
-    ownerAddress,
-    ownerEmail,
-    ownerPhone,
-    propertyAddress,
-    fullName: booking.name,
-    email: booking.email,
-    phone: booking.phone || "",
-    arrivalYmd,
-    departureYmd,
-    totalN,
-    accommodationN,
-    cleaningN,
-    optionsN,
-    touristTaxN,
-    deposit30N,
-    soldeN,
-    address: addressText,
-    occupantsText,
-    // ✅ Date saisie (obligatoire)
-    signatureDate: contractDate,
-  });
-
-  const subjectOwner = `Contrat signé — Demande #${rid}`;
-
-  const htmlOwner = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
-      <h2>${escapeHtml(subjectOwner)}</h2>
-      <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(
-    booking.email
-  )} — ${escapeHtml(booking.phone || "")}</p>
-      <p><b>Dates</b> : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(
-    formatDateFR(departureYmd)
-  )} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</p>
-      ${
-        totalN != null ? `<p><b>Total</b> : ${escapeHtml(toMoneyEUR(totalN))}</p>` : ""
-      }
-      <p><b>Adresse</b> : ${escapeHtml(addressText)}</p>
-      <p><b>Personnes présentes</b> :<br/>${escapeHtml(occupantsText).replace(
-        /\n/g,
-        "<br/>"
-      )}</p>
-      ${contractUrl ? `<p><a href="${contractUrl}">Voir le contrat en ligne</a></p>` : ""}
-      <hr/>
-      <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
-        contractText
-      )}</pre>
-    </div>
-  `;
-
-  const recipientsOwner = BOOKING_NOTIFY_EMAIL ? [BOOKING_NOTIFY_EMAIL] : [];
-
-  if (recipientsOwner.length) {
     await resend.emails.send({
       from: RESEND_FROM,
-      to: recipientsOwner,
+      to: [booking.email],
       replyTo: BOOKING_REPLY_TO || undefined,
-      subject: subjectOwner,
-      html: htmlOwner,
+      subject: "Code de signature électronique (6 chiffres)",
+      html: `
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+          <h2>Votre code de signature (6 chiffres)</h2>
+          <p>Pour confirmer votre signature électronique, saisissez ce code dans le contrat :</p>
+          <div style="font-size:32px;font-weight:800;letter-spacing:4px;margin:16px 0">${escapeHtml(code)}</div>
+          <p>Ce code est envoyé à l’adresse email utilisée pour la réservation. Il permet de confirmer que la personne qui réserve a bien accès à cette boîte email.</p>
+          <p style="color:#64748b;font-size:12px">Validité : environ 10 minutes.</p>
+        </div>
+      `,
+    });
+
+    return NextResponse.json({ ok: true, otp_sent: true, deposit30: deposit30N });
+  }
+
+  if (action === "verify_otp") {
+    const code = mustStr(body?.otp_code);
+    const ok = verifyOtpCode({ rid, email: booking.email, code });
+    if (!ok) return jsonError("Code invalide. Réessayez.", 400);
+
+    // ✅ marque comme signé (locataire)
+    try {
+      await supabase
+        .from("booking_contracts")
+        .update({
+          signed_at: new Date().toISOString(),
+          signed_method: "otp_email",
+        } as any)
+        .eq("booking_request_id", rid);
+    } catch {
+      // si colonne signed_method n'existe pas, on ignore
+      await supabase
+        .from("booking_contracts")
+        .update({ signed_at: new Date().toISOString() } as any)
+        .eq("booking_request_id", rid);
+    }
+
+    // ✅ Email post-signature (locataire) — avec RIB + bouton
+    const resend = requireResend();
+    const contractUrl = `${baseUrl()}/contract?rid=${encodeURIComponent(
+      rid
+    )}&t=${encodeURIComponent(t)}`;
+
+    const transferK = signTransferLink({ rid, email: booking.email, token: t });
+    const transferUrl = `${baseUrl()}/api/contract?rid=${encodeURIComponent(
+      rid
+    )}&t=${encodeURIComponent(t)}&action=transfer_sent&k=${encodeURIComponent(
+      transferK
+    )}`;
+
+    const arrivalYmd = String(booking.start_date || "").trim();
+    const departureYmd = String(booking.end_date || "").trim();
+
+    const deposit30Text = deposit30N != null ? toMoneyEUR(deposit30N) : "[____ €]";
+    const soldeText = soldeN != null ? toMoneyEUR(soldeN) : "[____ €]";
+    const totalText = totalN != null ? toMoneyEUR(totalN) : "[____ €]";
+
+    await resend.emails.send({
+      from: RESEND_FROM,
+      to: [booking.email],
+      replyTo: BOOKING_REPLY_TO || undefined,
+      subject: "Contrat signé ✅ — Paiement de l’acompte (30%)",
+      html: `
+        <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+          <h2>Merci ! Votre contrat est signé ✅</h2>
+
+          <p><b>Récap séjour</b></p>
+          <ul>
+            <li>Dates : ${escapeHtml(formatDateFR(arrivalYmd))} → ${escapeHtml(
+        formatDateFR(departureYmd)
+      )} (${nightsBetween(arrivalYmd, departureYmd)} nuit(s))</li>
+            <li>Total : <b>${escapeHtml(totalText)}</b></li>
+            <li>Acompte (30%) : <b>${escapeHtml(deposit30Text)}</b></li>
+            <li>Solde : <b>${escapeHtml(soldeText)}</b> (au plus tard 7 jours avant l’entrée dans les lieux)</li>
+          </ul>
+
+          <p><b>Pour bloquer vos dates de réservation</b>, merci d’effectuer le virement de l’acompte (30%), soit <b>${escapeHtml(
+            deposit30Text
+          )}</b>.</p>
+
+          <p><b>RIB</b></p>
+          <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
+            RIB_TEXT
+          )}</pre>
+
+          <p>Après envoi du virement, cliquez ici :</p>
+          <p>
+            <a href="${transferUrl}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:700">
+              J’ai bien envoyé le virement des 30%
+            </a>
+          </p>
+
+          <hr/>
+          <pre style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:8px">${escapeHtml(
+            ANNEXE3_TEXT
+          )}</pre>
+
+          <p style="color:#64748b;font-size:12px">Vous pouvez retrouver le contrat complet (avec annexes) ici : <a href="${contractUrl}">${contractUrl}</a></p>
+        </div>
+      `,
+    });
+
+    // ✅ Notif propriétaire (sans casser les templates existants ailleurs)
+    const recipientsOwner = BOOKING_NOTIFY_EMAIL ? [BOOKING_NOTIFY_EMAIL] : [];
+    if (recipientsOwner.length) {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: recipientsOwner,
+        replyTo: BOOKING_REPLY_TO || undefined,
+        subject: `Contrat signé (OTP email) — Demande #${rid}`,
+        html: `
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+            <h2>Contrat signé (locataire)</h2>
+            <p><b>Demande</b> : #${escapeHtml(rid)}</p>
+            <p><b>Locataire</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)} — ${escapeHtml(
+          booking.phone || ""
+        )}</p>
+            <p><b>Contrat</b> : <a href="${contractUrl}">ouvrir</a></p>
+            <p>⚠️ Étape suivante : attendre le virement (30%) puis signer côté propriétaire (étape à automatiser ensuite si tu veux une double-signature stockée en DB).</p>
+          </div>
+        `,
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      signed: true,
+      deposit30: deposit30N,
     });
   }
 
-  await resend.emails.send({
-    from: RESEND_FROM,
-    to: [booking.email],
-    replyTo: BOOKING_REPLY_TO || undefined,
-    subject: "Votre contrat est signé ✅",
-    html: `
-      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
-        <h2>Merci ! Votre contrat est signé ✅</h2>
-        <p>Vous pouvez conserver ce message comme preuve.</p>
-        ${contractUrl ? `<p><a href="${contractUrl}">Revoir le contrat en ligne</a></p>` : ""}
-        <hr/>
-        <pre style="white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:8px">${escapeHtml(
-          contractText
-        )}</pre>
-      </div>
-    `,
+  if (action === "transfer_sent") {
+    // déclaration virement depuis la pop-up (POST)
+    // best-effort DB
+    try {
+      await supabase
+        .from("booking_contracts")
+        .update({
+          transfer_declared_at: new Date().toISOString(),
+          transfer_declared: true,
+        } as any)
+        .eq("booking_request_id", rid);
+    } catch {
+      // ignore
+    }
+
+    const resend = requireResend();
+    const recipientsOwner = BOOKING_NOTIFY_EMAIL ? [BOOKING_NOTIFY_EMAIL] : [];
+    if (recipientsOwner.length) {
+      await resend.emails.send({
+        from: RESEND_FROM,
+        to: recipientsOwner,
+        replyTo: BOOKING_REPLY_TO || undefined,
+        subject: `Virement déclaré envoyé (30%) — Demande #${rid}`,
+        html: `
+          <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.45">
+            <h2>Virement déclaré envoyé (30%)</h2>
+            <p><b>Réservant</b> : ${escapeHtml(booking.name)} — ${escapeHtml(booking.email)}</p>
+            <p><b>Demande</b> : #${escapeHtml(rid)}</p>
+            <p>Le locataire a cliqué : <b>“virement envoyé”</b>.</p>
+            <p>⚠️ À vérifier sur ton compte bancaire.</p>
+          </div>
+        `,
+      });
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
+  // fallback: just saved draft
+  return NextResponse.json({
+    ok: true,
+    saved: true,
+    contract: saved,
+    deposit30: deposit30N,
   });
-
-  return NextResponse.json({ ok: true, contract: saved });
-}
-
-function escapeHtml(s: string) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
