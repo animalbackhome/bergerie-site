@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-// --- TYPES ---
 type Occupant = { first_name: string; last_name: string; age: string };
 type Booking = {
   id: string;
@@ -17,7 +16,16 @@ type Booking = {
   pricing?: any;
 };
 
-type Props = { booking: Booking; token: string; existing: any; };
+type ExistingContract = {
+  signer_address_line1: string;
+  signer_postal_code: string;
+  signer_city: string;
+  occupants: Occupant[];
+  signed_at?: string | null;
+  contract_date?: string | null;
+} | null;
+
+type Props = { booking: Booking; token: string; existing: ExistingContract; };
 
 // --- HELPERS ---
 const toMoneyEUR = (v: any) => {
@@ -31,13 +39,17 @@ const formatDateFR = (d: string) => {
   return `${day}/${m}/${y}`;
 };
 
+function formatOtpWhileTyping(value: string): string {
+  return String(value || "").replace(/\D/g, "").slice(0, 6);
+}
+
 function AnnexeBlock({ title, children, defaultOpen = false }: { title: string, children: React.ReactNode, defaultOpen?: boolean }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm text-black">
+    <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm text-slate-900">
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between bg-slate-100 px-4 py-3 text-left font-bold text-slate-900 hover:bg-slate-200"
+        className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-left font-semibold text-slate-800 hover:bg-slate-100 transition-colors"
       >
         <span>{title}</span>
         <span className="text-xl">{isOpen ? "−" : "+"}</span>
@@ -54,7 +66,6 @@ export default function ContractClient({ booking, token, existing }: Props) {
     email: "laurens-coralie@hotmail.com",
     phone: "0629465295",
   };
-
   const PROPERTY_ADDRESS = "2542 chemin des près neufs 83570 Carcès";
 
   const [addressLine1, setAddressLine1] = useState(existing?.signer_address_line1 || "");
@@ -63,16 +74,23 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [contractDate, setContractDate] = useState(existing?.contract_date || "");
   const [occupants, setOccupants] = useState<Occupant[]>([]);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [certifiedInsurance, setCertifiedInsurance] = useState(false);
+
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const isSigned = Boolean(existing?.signed_at);
 
   const pricingData = useMemo(() => {
     const p = booking.pricing || {};
     const total = p.total || 0;
     const acompte = Math.round(total * 0.3);
-    const excluded = ['total', 'cleaning', 'tourist_tax', 'base_accommodation', 'grand_total'];
     const options = Object.entries(p)
-      .filter(([k, v]) => !excluded.includes(k) && typeof v === 'number' && v > 0)
+      .filter(([k, v]) => !['total', 'cleaning', 'tourist_tax', 'base_accommodation'].includes(k) && typeof v === 'number' && v > 0)
       .map(([k, v]) => ({ label: k.replace(/_/g, ' '), value: v as number }));
-
     return { total, acompte, solde: total - acompte, menage: p.cleaning || 100, taxe: p.tourist_tax || 0, base: p.base_accommodation || 0, options };
   }, [booking.pricing]);
 
@@ -90,204 +108,157 @@ export default function ContractClient({ booking, token, existing }: Props) {
         last_name: i === 0 ? booking.full_name.split(' ').slice(1).join(' ') : "",
         age: ""
       })));
-    }
+    } else { setOccupants(existing.occupants); }
   }, [booking, existing]);
 
+  const handleAction = async (action: 'send_otp' | 'verify_otp') => {
+    setError(null);
+    if (!addressLine1 || !postalCode || !city || !contractDate) { setError("Veuillez remplir l'adresse et la date."); return; }
+    if (!acceptedTerms || !certifiedInsurance) { setError("Veuillez valider les cases d'acceptation."); return; }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/contract", {
+        method: "POST",
+        body: JSON.stringify({ action, rid: booking.id, t: token, otp_code: otpCode, signer_address_line1: addressLine1, signer_postal_code: postalCode, signer_city: city, occupants, contract_date: contractDate, accepted_terms: true })
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Erreur");
+      if (action === 'send_otp') { setOtpSent(true); setOkMsg("Code envoyé par email ✅"); }
+      else { window.location.reload(); }
+    } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-20 text-black font-sans">
-      <div className="bg-[#06243D] py-12 text-white">
-        <div className="mx-auto max-w-4xl px-6">
-          <h1 className="text-3xl font-bold uppercase italic">Contrat de Location Saisonnière</h1>
-          <p className="mt-2 text-blue-200 italic">Bergerie Provençale • Carcès</p>
+    <div className="min-h-screen bg-slate-950 pb-20 font-sans text-slate-900">
+      <div className="bg-gradient-to-r from-[#06243D] via-[#053A63] to-[#0B2A7A] py-10 text-white">
+        <div className="mx-auto max-w-6xl px-6">
+          <p className="text-sm opacity-80 uppercase tracking-widest">Superbe Bergerie • Contrat officiel</p>
+          <h1 className="mt-2 text-3xl font-bold">CONTRAT DE LOCATION SAISONNIÈRE ENTRE PARTICULIERS</h1>
         </div>
       </div>
 
-      <div className="mx-auto -mt-8 max-w-4xl px-6">
-        <div className="rounded-2xl bg-white p-8 shadow-2xl border border-slate-200">
+      <div className="mx-auto -mt-8 max-w-6xl px-6">
+        <div className="rounded-2xl bg-white p-8 shadow-2xl ring-1 ring-black/5">
           
-          <div className="space-y-12 whitespace-pre-wrap text-sm leading-relaxed">
-            {/* ARTICLES 1 À 20 */}
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase">1) Parties</h2>
-              <p><strong>Propriétaire (Bailleur)</strong></p>
-              <p>Nom / Prénom : {OWNER.name}</p>
-              <p>Adresse : {OWNER.address}</p>
-              <p>E-mail : {OWNER.email}</p>
-              <p>Téléphone : {OWNER.phone}</p>
-              <p className="mt-4"><strong>Locataire</strong></p>
-              <p>Nom / Prénom : {booking.full_name}</p>
-              <div className="mt-2 space-y-2">
-                <input placeholder="Adresse complète *" className="w-full border p-2 rounded bg-white" value={addressLine1} onChange={e => setAddressLine1(e.target.value)} />
-                <div className="flex gap-2">
-                  <input placeholder="CP *" className="w-1/3 border p-2 rounded bg-white" value={postalCode} onChange={e => setPostalCode(e.target.value)} />
-                  <input placeholder="Ville *" className="w-2/3 border p-2 rounded bg-white" value={city} onChange={e => setCity(e.target.value)} />
+          <div className="space-y-10 whitespace-pre-wrap">
+            {/* 1) PARTIES */}
+            <section className="border-b pb-8">
+              <h2 className="text-xl font-black text-[#06243D] underline uppercase mb-6">1) Parties</h2>
+              <div className="grid gap-8 md:grid-cols-2 text-sm">
+                <div className="bg-slate-50 p-5 rounded-xl border">
+                  <p className="font-bold text-blue-900 mb-2">Propriétaire (Bailleur)</p>
+                  <p>Nom / Prénom : {OWNER.name}</p>
+                  <p>Adresse : {OWNER.address}</p>
+                  <p>E-mail : {OWNER.email}</p>
+                  <p>Téléphone : {OWNER.phone}</p>
+                </div>
+                <div className="bg-slate-50 p-5 rounded-xl border">
+                  <p className="font-bold text-blue-900 mb-2">Locataire</p>
+                  <p>Nom / Prénom : {booking.full_name}</p>
+                  <div className="mt-3 space-y-3">
+                    <input placeholder="Votre adresse complète *" className="w-full border p-2 rounded" value={addressLine1} onChange={e => setAddressLine1(e.target.value)} disabled={isSigned} />
+                    <div className="flex gap-2">
+                      <input placeholder="Code Postal *" className="w-1/3 border p-2 rounded" value={postalCode} onChange={e => setPostalCode(e.target.value)} disabled={isSigned} />
+                      <input placeholder="Ville *" className="w-2/3 border p-2 rounded" value={city} onChange={e => setCity(e.target.value)} disabled={isSigned} />
+                    </div>
+                  </div>
                 </div>
               </div>
-              <p className="mt-2">E-mail : {booking.email}</p>
-              <p>Téléphone : {booking.phone || "[]"}</p>
-              <p className="mt-4 italic">Le locataire déclare être majeur et avoir la capacité de contracter. Conformément au RGPD, ces données sont traitées uniquement pour l'exécution de ce contrat.</p>
+              <p className="mt-4 text-[10px] italic text-slate-500">Le locataire déclare être majeur et avoir la capacité de contracter. Élection de domicile est faite aux adresses indiquées.</p>
             </section>
 
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase">2) Logement loué</h2>
-              <p>Désignation : Location saisonnière meublée</p>
-              <p>Adresse du logement : {PROPERTY_ADDRESS}</p>
-              <p>Capacité maximale : 8 personnes (voir Article 11).</p>
-              <p>Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.</p>
-              <p className="mt-4"><strong>Annexes (faisant partie intégrante du contrat) :</strong></p>
-              <p>Annexe 1 : État descriptif du logement (repris du site)</p>
-              <p>Annexe 2 : Inventaire / liste équipements (repris du site)</p>
-              <p>Annexe 3 : Règlement intérieur (repris et signé)</p>
-              <p>Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)</p>
-            </section>
-
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase">3) Durée — Dates — Horaires</h2>
+            {/* 2 & 3 & 4) TEXTE INTÉGRAL */}
+            <section className="text-sm leading-relaxed space-y-6">
+              <h2 className="text-xl font-black text-[#06243D] underline uppercase">2) Logement loué</h2>
+              <p>Désignation : Location saisonnière meublée sise au {PROPERTY_ADDRESS}. Capacité maximale : 8 personnes (voir Article 11). Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.</p>
+              
+              <h2 className="text-xl font-black text-[#06243D] underline uppercase pt-4">3) Durée — Dates — Horaires</h2>
               <p>Période : du {formatDateFR(booking.arrival_date)} au {formatDateFR(booking.departure_date)} pour {nights} nuits.</p>
-              <p className="mt-2"><strong>Horaires standard :</strong></p>
-              <p>Arrivée (check-in) : entre 16h et 18h</p>
-              <p>Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages)</p>
-              <p className="mt-2"><strong>Options (si accord préalable et selon disponibilités) :</strong></p>
-              <p>Arrivée début de journée : +70€</p>
-              <p>Départ fin de journée : +70€</p>
+              <p><strong>Horaires standard :</strong> Arrivée (check-in) : entre 16h et 18h. Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages).</p>
+              <p>Options : Arrivée début de journée (+70€) / Départ fin de journée (+70€).</p>
+
+              <h2 className="text-xl font-black text-[#06243D] underline uppercase pt-4">4) Prix — Taxes — Prestations</h2>
+              <div className="bg-slate-50 p-4 rounded-lg font-medium">
+                <p>Hébergement : {toMoneyEUR(pricingData.base)}</p>
+                <p>Forfait ménage : {toMoneyEUR(pricingData.menage)}</p>
+                <p>Taxe de séjour : {toMoneyEUR(pricingData.taxe)}</p>
+                {pricingData.options.map((opt, i) => (
+                  <p key={i} className="capitalize">+ {opt.label} : {toMoneyEUR(opt.value)}</p>
+                ))}
+                <p className="text-xl font-black mt-2 pt-2 border-t">TOTAL DU SÉJOUR : {toMoneyEUR(pricingData.total)}</p>
+              </div>
             </section>
 
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase">4) Prix — Taxes — Prestations</h2>
-              <p><strong>Prix total du séjour : {toMoneyEUR(pricingData.total)}</strong> comprenant :</p>
-              <p>Hébergement : {toMoneyEUR(pricingData.base)}</p>
-              <p>Forfait ménage : {toMoneyEUR(pricingData.menage)}</p>
-              <p>Taxe de séjour : {toMoneyEUR(pricingData.taxe)} (si applicable / selon règles locales)</p>
-              {pricingData.options.map((opt, i) => (
-                <p key={i} className="capitalize">+ {opt.label} : {toMoneyEUR(opt.value)}</p>
-              ))}
-            </section>
+            {/* ARTICLES 5 À 20 SANS RÉSUMÉ */}
+            <section className="text-sm leading-relaxed space-y-6">
+              <h2 className="text-lg font-bold text-[#06243D]">5) Paiement — Acompte (Virement uniquement)</h2>
+              <p>5.1 Acompte (30%) : Pour bloquer les dates, le locataire verse {toMoneyEUR(pricingData.acompte)}. Les parties conviennent que la somme constitue un ACOMPTE et non des arrhes. 5.2 Solde : Le solde de {toMoneyEUR(pricingData.solde)} doit être réglé au plus tard 7 jours avant l’entrée.</p>
+              
+              <h2 className="text-lg font-bold text-[#06243D]">8) Annulation / Non-présentation</h2>
+              <p>8.1 Par le locataire : L’acompte de 30% reste acquis. À compter de J-7, aucun remboursement n’est effectué. 8.2 No-show : À minuit le jour d'arrivée, l’entrée n'est plus possible sans nouvelle du locataire.</p>
 
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase">5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)</h2>
-              <p>Mode de paiement : virement bancaire uniquement. Aucun paiement par chèque n’est accepté.</p>
-              <p><strong>5.1 Acompte (30%) :</strong> Pour bloquer les dates, le locataire verse un acompte de 30% du prix total, soit {toMoneyEUR(pricingData.acompte)}.</p>
-              <p>✅ Les parties conviennent expressément que la somme versée à la réservation constitue un ACOMPTE et non des arrhes.</p>
-              <p><strong>5.2 Solde :</strong> Le solde, soit {toMoneyEUR(pricingData.solde)}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.</p>
-              <p>À défaut de paiement du solde dans ce délai, et sans réponse dans les 48h suivant l’e-mail de relance, le propriétaire pourra considérer la réservation comme annulée par le locataire, l’acompte restant acquis au propriétaire.</p>
-            </section>
+              <h2 className="text-lg font-bold text-[#06243D]">12) Dépôt de garantie (caution)</h2>
+              <p>Une caution de 500€ est demandée en liquide à l’arrivée. Elle est restituée après l’état des lieux de sortie, déduction faite des dégradations ou non-respect du règlement.</p>
 
-            <section>
-              <h2 className="text-xl font-black text-[#06243D] underline mb-4 uppercase text-black">Articles Complémentaires (6 à 20)</h2>
-              <p><strong>6) Formation du contrat :</strong> La réservation devient effective dès réception du présent contrat signé et de l’acompte.</p>
-              <p><strong>7) Absence de droit de rétractation :</strong> Prestation fournie à une date déterminée, pas de droit de rétractation.</p>
-              <p><strong>8) Annulation :</strong> Acompte de 30% acquis. À compter du paiement du solde (J-7), aucun remboursement possible.</p>
-              <p><strong>12) Dépôt de garantie :</strong> 500€ en liquide à l’arrivée. Restitué après état des lieux, déduction faite des dommages éventuels.</p>
-              <p><strong>16) Caméras :</strong> Informé de caméras sur les accès extérieurs uniquement pour sécurité.</p>
-              <p><strong>17) Assurance :</strong> Locataire responsable des dommages, assurance villégiature recommandée.</p>
+              <h2 className="text-lg font-bold text-[#06243D]">16) Caméras de surveillance</h2>
+              <p>Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs à des fins de sécurité. Aucune caméra n’est présente à l’intérieur.</p>
             </section>
           </div>
 
-          <h2 className="mt-12 text-2xl font-black text-[#06243D] underline uppercase">Annexes (Textes Intégraux)</h2>
-
-          <AnnexeBlock title="Annexe 1 : État descriptif du logement">
-{`Bergerie provençale en pleine nature, grand confort, piscine au sel, accès rapide lac/cascades, et espaces pensés pour les familles comme pour les séjours entre amis. 🌿
-
-🌿 Cadre & localisation
-🌿 Bergerie provençale en pierres nichée en pleine forêt, pour un séjour au calme absolu dans le Var.
-📍 À Carcès (Provence), à 10 minutes du village et de ses commerces (restaurants, pharmacie, supermarché...).
-🏞️ À environ 5 minutes à pied du lac de Carcès, des cascades et de la rivière, idéal pour les amoureux de plein air.
-💧 Proche des cascades du Caramy : baignades nature, balades, fraîcheur en été et paysages superbes.
-🌳 Terrain arboré de 3 750 m² : pins, chênes, oliviers et essences provençales, sans vis-à-vis.
-✨ Nuits incroyables : ciel étoilé, silence, ambiance “seul au monde” au cœur de la nature.
-🦌 Rencontres possibles : biches, chevreuils, renards.
-🚗 Accès par piste forestière : arrivée dépaysante, immersion totale.
-
-🏡 Le logement
-👨‍👩‍👧‍👦 Villa spacieuse et conviviale (215 m²) pour partager des moments en famille ou entre amis.
-🍽️ Cuisine équipée avec bar ouverte sur une terrasse d’environ 40 m².
-🌤️ Grande véranda lumineuse avec grandes tables.
-🔥 Salon cosy avec poêle à bois, TV et coin bar.
-🛏️ Chambre XXL (≈35 m²) avec deux lits doubles, dressing.
-🧸 Chambre familiale avec lit double, lit bébé, jeux, livres.
-🚿 Salle de bains avec grande douche à l’italienne, double vasque, serviettes fournies.
-🚻 WC séparé avec lave-mains.
-
-🛌 Suite indépendante
-🛌 Suite indépendante (≈35 m²) avec accès direct piscine : lit king-size, douche à l’italienne, WC, petit frigo.
-⚽ Baby-foot à disposition dans la suite.
-
-🏝️ Extérieurs & équipements
-🌀 Piscine au sel (Diffazur) : transats, bouées et jeux.
-🎾 Terrain de badminton.
-🏀 Panier de basket.
-🎯 Terrain de boules pour l’esprit “vacances en Provence”.
-🛝 Jeux pour enfants.
-🌴 Espace repas ombragé sous un grand arbre.
-🚗 Grand parking gratuit + abri voiture sur la propriété.
-🥾 Départ de balades direct : forêt, lac, cascades.
-
-🌟 Petite touche unique
-🧑‍🌾 Maison de gardien à env. 50 m : présence rassurante et aide possible.`}
+          {/* ANNEXES DÉTAILLÉES */}
+          <AnnexeBlock title="Annexe 1 : État descriptif complet">
+{`🌿 Bergerie provençale en pierres nichée en pleine forêt à Carcès. Terrain de 3 750 m² sans vis-à-vis. Accès par piste forestière.
+🏡 Logement : Villa de 215 m², cuisine équipée, terrasse 40 m², grande véranda. Chambre XXL, chambre familiale, suite indépendante avec baby-foot.
+🏝️ Extérieurs : Piscine au sel, badminton, basket, terrain de boules, aire de jeux enfants.`}
           </AnnexeBlock>
 
-          <AnnexeBlock title="Annexe 2 : Inventaire / Liste équipements">
-{`🛁 Salle de bain : 2 sèche-cheveux, 2 douches à l’italienne, Machine à laver, Produits de nettoyage, Shampooing, Savon pour le corps, Gel douche, Eau chaude.
-
-🛏️ Chambre et linge : Équipements de base, Serviettes, draps, savon et papier toilette, Grand dressing, Cintres, Draps, Couettes, Couvertures supplémentaires, 4 oreillers par lit, Traversins, Tables de nuit, Lampes de chevet, Stores, Fer à repasser, Étendoir à linge, Moustiquaire.
-
-🎬 Divertissement : Connexion maxi vitesse Starlink, Télévision (chaînes + Netflix + jeux vidéos), Livres, Jeux enfants, Terrain de boules, Jeux aquatiques, Badminton, Basket, Piscine.
-
-👨‍👩‍👧‍👦 Famille : Lit bébé (1,3 m x 70 cm), Lit parapluie, Livres & jouets, Chaise haute, Pare-feu poêle, Salle de jeux, Aire de jeux extérieure, Alarme piscine.
-
-🔥 Chauffage/Climatisation : Poêle à bois (en option), Ventilateurs portables, Chauffage central.
-
-🧯 Sécurité : Détecteur de fumée, Monoxyde de carbone, Extincteur, Kit premiers secours, Bâches anti-feu.
-
-🍽️ Cuisine : Cuisine équipée, Réfrigérateur, Micro-ondes, Mini frigo, Congélateur, Lave-vaisselle, Cuisinière, Four, Bouilloire, Cafetière, Vaisselle & couverts, Ustensiles barbecue.
-
-📍 Emplacement : Accès lac/cascades à pied, Entrée privée piste en terre, Laverie à proximité.`}
+          <AnnexeBlock title="Annexe 3 : Règlement Intérieur (Texte Intégral)" defaultOpen={true}>
+{`▶️ RDV Chapelle Notre Dame pour guidage (GPS imprécis). ⛔ Fêtes strictement interdites (expulsion police). ‼️ Max 8 personnes. 🎦 Caméras extérieures. 🚭 Non-fumeurs intérieur (cendrier extérieur obligatoire). ❌ Ne pas retirer les tapis noir du four. 🚮 Poubelles à emporter au départ. 🐶 Animaux : 10€/nuit. 📍 Arrivée 16h-18h / Départ 10h.`}
           </AnnexeBlock>
 
-          <AnnexeBlock title="Annexe 3 : Règlement Intérieur (Texte Officiel)" defaultOpen={true}>
-{`▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée.
-
-▶️ Suite à de nombreuses mauvaises expériences, un état des lieux sera effectué à l’arrivée et au départ.
-
-⛔️ Fêtes strictement interdites : expulsion immédiate.
-‼️ Nombre de personnes limité à 8. Supplément 50 €/pers/nuit pour tout dépassement (journée ou nuit).
-🚻 Personnes non déclarées interdites.
-🎦 Caméras de surveillance sur l’accès extérieur.
-🚼 Apporter matelas et literie pour personnes sup.
-❌ Canapés non convertibles : interdit d’y dormir.
-🛏️ NE PAS enlever la literie avant le départ.
-❌ Ne pas retirer les tapis noir du four, ne pas les jeter.
-🚭 Non-fumeurs à l’intérieur : cendriers obligatoires dehors.
-🚮 Poubelles : à emporter à votre départ.
-🍽️ Vaisselle : au lave-vaisselle (ne pas laisser dans l’évier).
-✅ Linge fourni : serviettes douche (hors piscine), draps.
-📛 Zones privées interdites (enclos des chats).
-🏊‍♀️ Local technique piscine interdit. Manipulation pompe/vannes interdite.
-❌ Ne pas démonter l’alarme piscine.
-🔥 Sécurité incendie : pétards et feux d'artifice interdits.
-🍗 Barbecue propre après usage. Cendres froides dans un sac.
-🐶 Animaux : supplément 10 €/chien/nuit.
-✅ Produits fournis : savon, papier toilette, sel, poivre, sucre, etc.
-🚰 Prévoir packs d’eau (eau du forage).
-🕯️ Poêle à bois en option : 40 € (1/4 de stère).
-📍 Arrivée 16h-18h / Départ 10h maximum.`}
-          </AnnexeBlock>
-
-          <div className="mt-12 border-t-4 border-[#06243D] pt-10 text-black">
-            <div className="flex items-start gap-3 mb-8">
-              <input type="checkbox" id="sign" className="h-6 w-6 mt-1 cursor-pointer" checked={acceptedTerms} onChange={e => setAcceptedTerms(e.target.checked)} />
-              <label htmlFor="sign" className="text-sm font-bold leading-tight cursor-pointer">
-                Je déclare avoir pris connaissance de l'intégralité du contrat et de ses annexes (État descriptif, Inventaire, Règlement intérieur), j'en accepte sans réserve les conditions et je certifie l'exactitude des informations fournies.
+          {/* SECTION SIGNATURE OTP */}
+          <section className="mt-12 border-t-4 border-[#06243D] pt-10 text-slate-900">
+            <h2 className="text-xl font-black uppercase mb-6">Signature Électronique Sécurisée</h2>
+            
+            <div className="space-y-4 mb-8">
+              <label className="flex items-start gap-3 text-sm font-bold">
+                <input type="checkbox" className="h-5 w-5 mt-1" checked={acceptedTerms} onChange={e => setAcceptedTerms(e.target.checked)} disabled={isSigned} />
+                <span>J'accepte l'intégralité du contrat et du règlement intérieur (Annexe 3).</span>
+              </label>
+              <label className="flex items-start gap-3 text-sm font-bold">
+                <input type="checkbox" className="h-5 w-5 mt-1" checked={certifiedInsurance} onChange={e => setCertifiedInsurance(e.target.checked)} disabled={isSigned} />
+                <span>Je certifie être couvert par une assurance responsabilité civile villégiature (Article 17).</span>
               </label>
             </div>
-            <div className="flex items-center gap-4 font-bold mb-6">
-              <span>Fait à Carcès, le :</span>
-              <input type="text" placeholder="JJ/MM/AAAA" className="rounded border border-slate-400 p-2 w-40 text-black bg-white" value={contractDate} onChange={e => setContractDate(e.target.value)} />
+
+            <div className="bg-slate-50 p-6 rounded-xl border-2 border-dashed border-slate-200 mb-8">
+              <h3 className="font-bold mb-2">Pourquoi un code de signature ?</h3>
+              <p className="text-sm text-slate-600">Pour garantir que la personne qui signe est bien celle qui a effectué la demande, nous envoyons un <strong>code unique à 6 chiffres</strong> par email. Cela sécurise juridiquement votre signature.</p>
             </div>
-            <button disabled={!acceptedTerms || !token} className="w-full rounded-xl bg-[#06243D] py-5 text-xl font-black text-white uppercase tracking-widest hover:bg-black disabled:opacity-30">
-              Signer le contrat
-            </button>
-          </div>
+
+            <div className="flex flex-col gap-6">
+              <div className="flex items-center gap-4 font-bold">
+                <span>Fait à Carcès, le :</span>
+                <input type="text" placeholder="JJ/MM/AAAA" className="border p-2 w-40" value={contractDate} onChange={e => setContractDate(e.target.value)} disabled={isSigned} />
+              </div>
+
+              {!isSigned && (
+                <>
+                  {!otpSent ? (
+                    <button onClick={() => handleAction('send_otp')} disabled={loading || !token} className="w-full rounded-xl bg-[#06243D] py-5 text-xl font-black text-white uppercase hover:bg-black disabled:opacity-30">Recevoir mon code par email</button>
+                  ) : (
+                    <div className="space-y-4">
+                      <input maxLength={6} placeholder="Code à 6 chiffres" className="w-full text-center text-3xl font-bold p-4 border-2 border-blue-500 rounded-xl" value={otpCode} onChange={e => setOtpCode(formatOtpWhileTyping(e.target.value))} />
+                      <button onClick={() => handleAction('verify_otp')} disabled={loading || otpCode.length < 6} className="w-full rounded-xl bg-emerald-700 py-5 text-xl font-black text-white uppercase hover:bg-emerald-800">Confirmer la signature</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            {error && <p className="mt-4 text-center font-bold text-red-600">{error}</p>}
+            {okMsg && <p className="mt-4 text-center font-bold text-emerald-600">{okMsg}</p>}
+          </section>
+
         </div>
       </div>
     </div>
