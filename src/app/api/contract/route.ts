@@ -139,9 +139,6 @@ function verifyTransferLink(args: { rid: string; email: string; token: string; k
 
 function baseUrl() { return SITE_URL ? SITE_URL.replace(/\/$/, "") : ""; }
 
-/**
- * ANNEXE 3 : RÈGLEMENT INTÉRIEUR COMPLET (Injecté depuis ta demande)
- */
 const ANNEXE3_TEXT = `▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
 ▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
 ⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
@@ -152,7 +149,7 @@ const ANNEXE3_TEXT = `▶️ Le GPS ne trouvant pas la villa en pleine forêt, n
 ❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
 🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
 ❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
-🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
+🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun megots au sol (risque d’incendie élevé et non-respect du lieu naturel)
 🚮 Poubelles : à emporter à votre départ
 🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
 ✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
@@ -169,9 +166,6 @@ const ANNEXE3_TEXT = `▶️ Le GPS ne trouvant pas la villa en pleine forêt, n
 📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
 📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`;
 
-/**
- * RIB : COORDONNÉES BANCAIRES (Injecté depuis ta capture Revolut)
- */
 const RIB_TEXT = `COORDONNÉES BANCAIRES POUR LE VIREMENT (ACOMPTE 30%) :
 Bénéficiaire : Coralie Laurens
 IBAN : FR76 2823 3000 0105 5571 3835 979
@@ -218,7 +212,7 @@ export async function POST(req: Request) {
   const parsedDate = parseContractDateFR(mustStr(body?.contract_date));
   if (!parsedDate.ok) return jsonError("Date de contrat invalide (JJ/MM/AAAA).", 400);
 
-  const normOccupants = occupants.map((o: any) => ({ first_name: mustStr(o?.first_name), last_name: mustStr(o?.last_name), age: mustStr(o?.age) })).filter(o => o.first_name && o.last_name);
+  const normOccupants = occupants.map((o: any) => ({ first_name: mustStr(o?.first_name), last_name: mustStr(o?.last_name), age: mustStr(o?.age) })).filter((o: any) => o.first_name && o.last_name);
   if (!addressLine1 || !postalCode || !city || !acceptedTerms || normOccupants.length === 0) return jsonError("Formulaire incomplet.", 400);
 
   await supabase.from("booking_contracts").upsert({ booking_request_id: rid, signer_address_line1: addressLine1, signer_postal_code: postalCode, signer_city: city, signer_country: country, occupants: normOccupants, contract_date: parsedDate.normalized, ip: req.headers.get("x-forwarded-for"), user_agent: req.headers.get("user-agent") } as any, { onConflict: "booking_request_id" });
