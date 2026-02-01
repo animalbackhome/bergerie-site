@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL('https://superbe-bergerie-foret-piscine-lac.com'),
   
-  // C'EST ICI QUE J'AI AJOUTÉ TA CLÉ GOOGLE POUR QUE ÇA VALIDE
+  // TA CLÉ GOOGLE VALIDÉE
   verification: {
     google: 'Eu_G0T3L0kvNtJcJg7bxU8GoHaxVdqIBtQpB35vpGvo',
   },
@@ -32,7 +32,8 @@ export const metadata: Metadata = {
     type: 'website',
     images: [
       {
-        url: '/nom-de-ta-meilleure-photo.jpg', // ⚠️ Vérifie que tu as bien mis le vrai nom de ta photo ici
+        // J'AI MIS LE NOM OPTIMISÉ ICI. Assure-toi d'avoir renommé ta photo pareil !
+        url: '/bergerie-piscine.jpg', 
         width: 1200,
         height: 630,
         alt: 'Vue sublime de la bergerie en pierre avec piscine privée et forêt',
@@ -41,7 +42,7 @@ export const metadata: Metadata = {
   },
 };
 
-// Données structurées pour le référencement local (invisible)
+// Données structurées
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'VacationRental',
