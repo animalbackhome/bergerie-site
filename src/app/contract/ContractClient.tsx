@@ -113,19 +113,43 @@ export default function ContractClient({ booking, token, existing }: Props) {
 
   const handleAction = async (action: 'send_otp' | 'verify_otp') => {
     setError(null);
+    setOkMsg(null);
     if (!addressLine1 || !postalCode || !city || !contractDate) { setError("Veuillez remplir l'adresse et la date."); return; }
     if (!acceptedTerms || !certifiedInsurance) { setError("Veuillez valider les cases d'acceptation."); return; }
+    
     setLoading(true);
     try {
       const res = await fetch("/api/contract", {
         method: "POST",
-        body: JSON.stringify({ action, rid: booking.id, t: token, otp_code: otpCode, signer_address_line1: addressLine1, signer_postal_code: postalCode, signer_city: city, occupants, contract_date: contractDate, accepted_terms: true })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+            action, 
+            rid: booking.id, 
+            t: token, 
+            otp_code: otpCode, 
+            signer_address_line1: addressLine1, 
+            signer_postal_code: postalCode, 
+            signer_city: city, 
+            occupants, 
+            contract_date: contractDate, 
+            accepted_terms: true 
+        })
       });
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || "Erreur");
-      if (action === 'send_otp') { setOtpSent(true); setOkMsg("Code envoyé par email ✅"); }
-      else { window.location.reload(); }
-    } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+      if (!data.ok) throw new Error(data.error || "Erreur lors de l'opération.");
+      
+      if (action === 'send_otp') { 
+        setOtpSent(true); 
+        setOkMsg("Code envoyé par email ✅"); 
+      } else { 
+        setOkMsg("Contrat signé avec succès ! Redirection...");
+        window.location.reload(); 
+      }
+    } catch (e: any) { 
+        setError(e.message); 
+    } finally { 
+        setLoading(false); 
+    }
   };
 
   return (
@@ -155,6 +179,10 @@ export default function ContractClient({ booking, token, existing }: Props) {
                 <div className="bg-slate-50 p-5 rounded-xl border">
                   <p className="font-bold text-blue-900 mb-2">Locataire</p>
                   <p>Nom / Prénom : {booking.full_name}</p>
+                  {/* AJOUT AUTOMATIQUE EMAIL ET TÉLÉPHONE */}
+                  <p>E-mail : {booking.email}</p>
+                  <p>Téléphone : {booking.phone || "Non renseigné"}</p>
+                  
                   <div className="mt-3 space-y-3">
                     <input placeholder="Votre adresse complète *" className="w-full border p-2 rounded" value={addressLine1} onChange={e => setAddressLine1(e.target.value)} disabled={isSigned} />
                     <div className="flex gap-2">
@@ -245,7 +273,7 @@ Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)</p>
             </section>
           </div>
 
-          {/* ANNEXES INTÉGRALES SANS AUCUN RÉSUMÉ */}
+          {/* ANNEXES */}
           <AnnexeBlock title="Annexe 1 : État descriptif complet" defaultOpen={false}>
 {`Bergerie provençale en pleine nature, grand confort, piscine au sel, accès rapide lac/cascades, et espaces pensés pour les familles comme pour les séjours entre amis. 🌿
 
@@ -371,7 +399,7 @@ Les équipements listés ci-dessous sont disponibles sur place (selon l’organi
 
             <div className="bg-slate-50 p-6 rounded-xl border-2 border-dashed border-slate-200 mb-8">
               <h3 className="font-bold mb-2">Pourquoi un code de signature ?</h3>
-              <p className="text-sm text-slate-600">Pour garantir l'identité du signataire, nous envoyons un <strong>code unique à 6 chiffres</strong> par email. Cela sécurise juridiquement votre engagement.</p>
+              <p className="text-sm text-slate-600">Pour garantir l'identité du signataire, nous envoyons un <strong>code unique à 6 chiffres</strong> par email à l'adresse renseignée lors de la réservation.</p>
             </div>
 
             <div className="flex flex-col gap-6">
@@ -383,18 +411,40 @@ Les équipements listés ci-dessous sont disponibles sur place (selon l’organi
               {!isSigned && (
                 <>
                   {!otpSent ? (
-                    <button onClick={() => handleAction('send_otp')} disabled={loading || !token} className="w-full rounded-xl bg-[#06243D] py-5 text-xl font-black text-white uppercase hover:bg-black disabled:opacity-30">Recevoir mon code par email</button>
+                    <button 
+                        onClick={() => handleAction('send_otp')} 
+                        disabled={loading} 
+                        className="w-full rounded-xl bg-[#06243D] py-5 text-xl font-black text-white uppercase hover:bg-black disabled:opacity-30 transition-all"
+                    >
+                        {loading ? "Chargement..." : "Recevoir mon code par email"}
+                    </button>
                   ) : (
-                    <div className="space-y-4">
-                      <input maxLength={6} placeholder="Code à 6 chiffres" className="w-full text-center text-3xl font-bold p-4 border-2 border-blue-500 rounded-xl" value={otpCode} onChange={e => setOtpCode(formatOtpWhileTyping(e.target.value))} />
-                      <button onClick={() => handleAction('verify_otp')} disabled={loading || otpCode.length < 6} className="w-full rounded-xl bg-emerald-700 py-5 text-xl font-black text-white uppercase hover:bg-emerald-800">Confirmer la signature</button>
+                    <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                      <div className="text-center p-4 bg-blue-50 border border-blue-200 rounded-xl mb-2">
+                        <p className="text-blue-800 font-bold text-sm">Veuillez saisir le code reçu à : {booking.email}</p>
+                      </div>
+                      <input 
+                        type="text"
+                        maxLength={6} 
+                        placeholder="Entrez les 6 chiffres" 
+                        className="w-full text-center text-3xl font-bold p-4 border-2 border-blue-500 rounded-xl focus:ring-4 focus:ring-blue-100 outline-none" 
+                        value={otpCode} 
+                        onChange={e => setOtpCode(formatOtpWhileTyping(e.target.value))} 
+                      />
+                      <button 
+                        onClick={() => handleAction('verify_otp')} 
+                        disabled={loading || otpCode.length < 6} 
+                        className="w-full rounded-xl bg-emerald-700 py-5 text-xl font-black text-white uppercase hover:bg-emerald-800 disabled:opacity-30 transition-all"
+                      >
+                        {loading ? "Vérification..." : "Confirmer la signature"}
+                      </button>
                     </div>
                   )}
                 </>
               )}
             </div>
-            {error && <p className="mt-4 text-center font-bold text-red-600">{error}</p>}
-            {okMsg && <p className="mt-4 text-center font-bold text-emerald-600">{okMsg}</p>}
+            {error && <p className="mt-4 text-center font-bold text-red-600 p-3 bg-red-50 border border-red-100 rounded-lg">{error}</p>}
+            {okMsg && <p className="mt-4 text-center font-bold text-emerald-600 p-3 bg-emerald-50 border border-emerald-100 rounded-lg">{okMsg}</p>}
           </section>
 
         </div>
