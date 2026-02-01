@@ -140,7 +140,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
       <div className="mx-auto -mt-8 max-w-6xl px-6">
         <div className="rounded-2xl bg-white p-8 shadow-2xl ring-1 ring-black/5">
           
-          <div className="space-y-10 whitespace-pre-wrap text-sm leading-relaxed">
+          <div className="space-y-10 whitespace-pre-wrap text-sm leading-relaxed text-black">
             {/* 1) PARTIES */}
             <section className="border-b pb-8">
               <h2 className="text-xl font-black text-[#06243D] underline uppercase mb-6">1) Parties</h2>
@@ -198,14 +198,50 @@ Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)</p>
               <p><strong>5.1 Acompte (30%) :</strong> Pour bloquer les dates, le locataire verse un acompte de 30% soit {toMoneyEUR(pricingData.acompte)}. Les parties conviennent que la somme constitue un ACOMPTE et non des arrhes.</p>
               <p><strong>5.2 Solde :</strong> Le solde, soit {toMoneyEUR(pricingData.solde)}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.</p>
               
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">6) Formation du contrat — Réservation</h2>
+              <p>La réservation devient effective dès réception du présent contrat signé et de l’acompte de 30%.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">7) Absence de droit de rétractation</h2>
+              <p>Le locataire est informé que, pour une prestation d’hébergement fournie à une date déterminée, il ne bénéficie pas d’un droit de rétractation.</p>
+
               <h2 className="text-lg font-bold text-[#06243D] uppercase">8) Annulation / Non-présentation</h2>
-              <p>8.1 Par le locataire : L’acompte de 30% reste acquis. À compter du paiement du solde (J-7), aucun remboursement n’est effectué. 8.2 Non-présentation : À partir de minuit le jour d'arrivée, l'entrée n'est plus possible.</p>
+              <p>8.1 Par le locataire : Toute annulation doit être notifiée par écrit. L’acompte de 30% reste définitivement acquis. À compter de J-7, aucun remboursement n’est effectué.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">9) Annulation par le propriétaire</h2>
+              <p>En cas d’annulation par le propriétaire (hors force majeure), celui-ci remboursera au locataire l’intégralité des sommes versées dans un délai de 7 jours.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">10) Force majeure</h2>
+              <p>Aucune des parties ne pourra être tenue responsable si l’exécution du contrat est empêchée par un événement répondant à la définition de la force majeure.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">11) État des lieux — Ménage — Entretien</h2>
+              <p>Un état des lieux contradictoire est signé à l’arrivée et au départ. Le ménage est assuré par le propriétaire dans la limite d’un usage normal.</p>
 
               <h2 className="text-lg font-bold text-[#06243D] uppercase">12) Dépôt de garantie (caution)</h2>
               <p>Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée. Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre des dégradations ou non-respect du règlement.</p>
 
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">13) Identité du locataire</h2>
+              <p>À l’arrivée, le locataire s’engage à présenter une pièce d’identité au nom de la personne ayant réservé.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">14) Capacité — Personnes supplémentaires — Visiteurs</h2>
+              <p>Capacité maximale : 8 personnes. Supplément : 50€/personne/nuit et 50€/personne en journée (même sans nuitée), selon accord préalable.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">15) Animaux</h2>
+              <p>Animaux acceptés selon conditions. Supplément : 10€ par chien et par nuit.</p>
+
               <h2 className="text-lg font-bold text-[#06243D] uppercase">16) Caméras (information)</h2>
               <p>Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs à des fins de sécurité. Aucune caméra n’est présente à l’intérieur.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">17) Assurance</h2>
+              <p>Le locataire est responsable des dommages survenant de son fait et déclare être couvert par une assurance responsabilité civile villégiature (ou équivalent).</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">18) Utilisation paisible — Règlement intérieur</h2>
+              <p>Le locataire s’engage à une jouissance paisible des lieux et au respect du Règlement intérieur (Annexe 3).</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">19) Cession / Sous-location</h2>
+              <p>La location ne peut bénéficier à des tiers, sauf accord écrit du propriétaire.</p>
+
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">20) Litiges</h2>
+              <p>Contrat entre particuliers. En cas de difficulté, les parties recherchent une solution amiable. À défaut, le litige relèvera des juridictions compétentes.</p>
             </section>
           </div>
 
