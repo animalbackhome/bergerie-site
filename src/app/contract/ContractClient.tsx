@@ -89,7 +89,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
     const total = p.total || 0;
     const acompte = Math.round(total * 0.3);
     const options = Object.entries(p)
-      .filter(([k, v]) => !['total', 'cleaning', 'tourist_tax', 'base_accommodation'].includes(k) && typeof v === 'number' && v > 0)
+      .filter(([k, v]) => !['total', 'cleaning', 'tourist_tax', 'base_accommodation', 'grand_total'].includes(k) && typeof v === 'number' && v > 0)
       .map(([k, v]) => ({ label: k.replace(/_/g, ' '), value: v as number }));
     return { total, acompte, solde: total - acompte, menage: p.cleaning || 100, taxe: p.tourist_tax || 0, base: p.base_accommodation || 0, options };
   }, [booking.pricing]);
@@ -140,7 +140,7 @@ export default function ContractClient({ booking, token, existing }: Props) {
       <div className="mx-auto -mt-8 max-w-6xl px-6">
         <div className="rounded-2xl bg-white p-8 shadow-2xl ring-1 ring-black/5">
           
-          <div className="space-y-10 whitespace-pre-wrap">
+          <div className="space-y-10 whitespace-pre-wrap text-sm leading-relaxed">
             {/* 1) PARTIES */}
             <section className="border-b pb-8">
               <h2 className="text-xl font-black text-[#06243D] underline uppercase mb-6">1) Parties</h2>
@@ -167,65 +167,167 @@ export default function ContractClient({ booking, token, existing }: Props) {
               <p className="mt-4 text-[10px] italic text-slate-500">Le locataire déclare être majeur et avoir la capacité de contracter. Élection de domicile est faite aux adresses indiquées.</p>
             </section>
 
-            {/* 2 & 3 & 4) TEXTE INTÉGRAL */}
-            <section className="text-sm leading-relaxed space-y-6">
+            {/* TEXTE JURIDIQUE COMPLET */}
+            <section className="space-y-6">
               <h2 className="text-xl font-black text-[#06243D] underline uppercase">2) Logement loué</h2>
               <p>Désignation : Location saisonnière meublée sise au {PROPERTY_ADDRESS}. Capacité maximale : 8 personnes (voir Article 11). Le logement est loué à titre de résidence de vacances. Le locataire ne pourra s’en prévaloir comme résidence principale.</p>
-              
+              <p><strong>Annexes (faisant partie intégrante du contrat) :</strong>
+Annexe 1 : État descriptif du logement (repris du site)
+Annexe 2 : Inventaire / liste équipements (repris du site)
+Annexe 3 : Règlement intérieur (repris et signé)
+Annexe 4 : État des lieux d’entrée / sortie (à signer sur place)</p>
+
               <h2 className="text-xl font-black text-[#06243D] underline uppercase pt-4">3) Durée — Dates — Horaires</h2>
               <p>Période : du {formatDateFR(booking.arrival_date)} au {formatDateFR(booking.departure_date)} pour {nights} nuits.</p>
               <p><strong>Horaires standard :</strong> Arrivée (check-in) : entre 16h et 18h. Départ (check-out) : au plus tard 10h (logement libre de personnes et bagages).</p>
-              <p>Options : Arrivée début de journée (+70€) / Départ fin de journée (+70€).</p>
+              <p><strong>Options (si accord préalable et selon disponibilités) :</strong> Arrivée début de journée : +70€ / Départ fin de journée : +70€</p>
 
               <h2 className="text-xl font-black text-[#06243D] underline uppercase pt-4">4) Prix — Taxes — Prestations</h2>
-              <div className="bg-slate-50 p-4 rounded-lg font-medium">
+              <div className="bg-slate-50 p-4 rounded-lg font-medium border">
                 <p>Hébergement : {toMoneyEUR(pricingData.base)}</p>
                 <p>Forfait ménage : {toMoneyEUR(pricingData.menage)}</p>
-                <p>Taxe de séjour : {toMoneyEUR(pricingData.taxe)}</p>
+                <p>Taxe de séjour : {toMoneyEUR(pricingData.taxe)} (si applicable / selon règles locales)</p>
                 {pricingData.options.map((opt, i) => (
-                  <p key={i} className="capitalize">+ {opt.label} : {toMoneyEUR(opt.value)}</p>
+                  <p key={i} className="capitalize text-slate-700">+ {opt.label} : {toMoneyEUR(opt.value)}</p>
                 ))}
-                <p className="text-xl font-black mt-2 pt-2 border-t">TOTAL DU SÉJOUR : {toMoneyEUR(pricingData.total)}</p>
+                <p className="text-xl font-black mt-2 pt-2 border-t border-slate-300">TOTAL DU SÉJOUR : {toMoneyEUR(pricingData.total)}</p>
               </div>
-            </section>
 
-            {/* ARTICLES 5 À 20 SANS RÉSUMÉ */}
-            <section className="text-sm leading-relaxed space-y-6">
-              <h2 className="text-lg font-bold text-[#06243D]">5) Paiement — Acompte (Virement uniquement)</h2>
-              <p>5.1 Acompte (30%) : Pour bloquer les dates, le locataire verse {toMoneyEUR(pricingData.acompte)}. Les parties conviennent que la somme constitue un ACOMPTE et non des arrhes. 5.2 Solde : Le solde de {toMoneyEUR(pricingData.solde)} doit être réglé au plus tard 7 jours avant l’entrée.</p>
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">5) Paiement — Acompte — Solde (VIREMENT UNIQUEMENT)</h2>
+              <p>Mode de paiement : virement bancaire uniquement. Aucun paiement par chèque n’est accepté.</p>
+              <p><strong>5.1 Acompte (30%) :</strong> Pour bloquer les dates, le locataire verse un acompte de 30% soit {toMoneyEUR(pricingData.acompte)}. Les parties conviennent que la somme constitue un ACOMPTE et non des arrhes.</p>
+              <p><strong>5.2 Solde :</strong> Le solde, soit {toMoneyEUR(pricingData.solde)}, doit être réglé au plus tard 7 jours avant l’entrée dans les lieux.</p>
               
-              <h2 className="text-lg font-bold text-[#06243D]">8) Annulation / Non-présentation</h2>
-              <p>8.1 Par le locataire : L’acompte de 30% reste acquis. À compter de J-7, aucun remboursement n’est effectué. 8.2 No-show : À minuit le jour d'arrivée, l’entrée n'est plus possible sans nouvelle du locataire.</p>
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">8) Annulation / Non-présentation</h2>
+              <p>8.1 Par le locataire : L’acompte de 30% reste acquis. À compter du paiement du solde (J-7), aucun remboursement n’est effectué. 8.2 Non-présentation : À partir de minuit le jour d'arrivée, l'entrée n'est plus possible.</p>
 
-              <h2 className="text-lg font-bold text-[#06243D]">12) Dépôt de garantie (caution)</h2>
-              <p>Une caution de 500€ est demandée en liquide à l’arrivée. Elle est restituée après l’état des lieux de sortie, déduction faite des dégradations ou non-respect du règlement.</p>
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">12) Dépôt de garantie (caution)</h2>
+              <p>Un dépôt de garantie de 500€ est demandé en liquide à l’arrivée. Il est restitué après l’état des lieux de sortie, déduction faite des sommes dues au titre des dégradations ou non-respect du règlement.</p>
 
-              <h2 className="text-lg font-bold text-[#06243D]">16) Caméras de surveillance</h2>
+              <h2 className="text-lg font-bold text-[#06243D] uppercase">16) Caméras (information)</h2>
               <p>Le locataire est informé de la présence de caméras uniquement sur les accès extérieurs à des fins de sécurité. Aucune caméra n’est présente à l’intérieur.</p>
             </section>
           </div>
 
-          {/* ANNEXES DÉTAILLÉES */}
-          <AnnexeBlock title="Annexe 1 : État descriptif complet">
-{`🌿 Bergerie provençale en pierres nichée en pleine forêt à Carcès. Terrain de 3 750 m² sans vis-à-vis. Accès par piste forestière.
-🏡 Logement : Villa de 215 m², cuisine équipée, terrasse 40 m², grande véranda. Chambre XXL, chambre familiale, suite indépendante avec baby-foot.
-🏝️ Extérieurs : Piscine au sel, badminton, basket, terrain de boules, aire de jeux enfants.`}
+          {/* ANNEXES INTÉGRALES SANS AUCUN RÉSUMÉ */}
+          <AnnexeBlock title="Annexe 1 : État descriptif complet" defaultOpen={false}>
+{`Bergerie provençale en pleine nature, grand confort, piscine au sel, accès rapide lac/cascades, et espaces pensés pour les familles comme pour les séjours entre amis. 🌿
+
+🌿 Cadre & localisation
+🌿 Bergerie provençale en pierres nichée en pleine forêt, pour un séjour au calme absolu dans le Var.
+📍 À Carcès (Provence), à 10 minutes du village et de ses commerces (restaurants, pharmacie, supermarché...).
+🏞️ À environ 5 minutes à pied du lac de Carcès, des cascades et de la rivière, idéal pour les amoureux de plein air.
+💧 Proche des cascades du Caramy : baignades nature, balades, fraîcheur en été et paysages superbes.
+🌳 Terrain arboré de 3 750 m² : pins, chênes, oliviers et essences provençales, sans vis-à-vis.
+✨ Nuits incroyables : ciel étoilé, silence, ambiance “seul au monde” au cœur de la nature.
+🦌 Rencontres possibles : biches, chevreuils, renards (la forêt méditerranéenne est tout autour).
+🚗 Accès par piste forestière : arrivée dépaysante, immersion totale dès les premières minutes.
+
+🏡 Le logement
+👨‍👩‍👧‍👦 Une villa spacieuse et conviviale (215 m²) pensée pour partager des moments en famille ou entre amis.
+🍽️ Cuisine équipée avec bar ouverte sur une terrasse d’environ 40 m², côté piscine et forêt.
+🌤️ Grande véranda lumineuse avec grandes tables, parfaite pour les repas “dedans-dehors”.
+🔥 Salon cosy avec poêle à bois, TV et coin bar (ambiance chaleureuse le soir).
+🛏️ Chambre XXL (≈35 m²) avec deux lits doubles, dressing, décoration apaisante.
+🧸 Chambre familiale avec lit double, lit bébé, jeux, livres, espace enfant (pratique et rassurant).
+🚿 Salle de bains avec grande douche à l’italienne, double vasque, rangements, serviettes fournies.
+🚻 WC séparé avec lave-mains pour plus de confort.
+
+🛌 Suite indépendante
+🛌 Suite indépendante (≈35 m²) avec accès direct piscine : lit king-size, douche à l’italienne, WC, petit frigo.
+⚽ Baby-foot à disposition dans la suite (bonus très apprécié).
+
+🏝️ Extérieurs & équipements
+🌀 Piscine au sel (Diffazur) : transats, bouées et jeux, pour des journées 100% détente.
+🎾 Terrain de badminton.
+🏀 Panier de basket.
+🎯 Terrain de boules pour l’esprit “vacances en Provence”.
+🛝 Jeux pour enfants.
+🌴 Espace repas ombragé sous un grand arbre, idéal pour les déjeuners d’été.
+🚗 Grand parking gratuit + abri voiture sur la propriété.
+🥾 Départ de balades direct : forêt, lac, cascades, randonnées accessibles rapidement.
+
+🌟 Petite touche unique
+🧑‍🌾 Maison de gardien à env. 50 m : présence rassurante et aide possible en cas de besoin.`}
           </AnnexeBlock>
 
-          <AnnexeBlock title="Annexe 3 : Règlement Intérieur (Texte Intégral)" defaultOpen={true}>
-{`▶️ RDV Chapelle Notre Dame pour guidage (GPS imprécis). ⛔ Fêtes strictement interdites (expulsion police). ‼️ Max 8 personnes. 🎦 Caméras extérieures. 🚭 Non-fumeurs intérieur (cendrier extérieur obligatoire). ❌ Ne pas retirer les tapis noir du four. 🚮 Poubelles à emporter au départ. 🐶 Animaux : 10€/nuit. 📍 Arrivée 16h-18h / Départ 10h.`}
+          <AnnexeBlock title="Annexe 2 : Inventaire / Liste équipements" defaultOpen={false}>
+{`Ce que propose ce logement
+Les équipements listés ci-dessous sont disponibles sur place (selon l’organisation du logement).
+
+🛁 Salle de bain
+💨 2 sèche-cheveux, 🚿 2 douches à l’italienne, 🧺 Machine à laver, 🧼 Produits de nettoyage, 🧴 Shampooing, 🫧 Savon pour le corps, 🫧 Gel douche, 🔥 Eau chaude.
+
+🛏️ Chambre et linge
+✅ Équipements de base (Serviettes, draps, savon et papier toilette), 🧳 Grand dressing, 🧥 Cintres, 🧻 Draps, 🛌 Couettes, 🛌 Couvertures supplémentaires, 🛏️ 4 oreillers par lit, 🛏️ Traversins, 🛋️ Tables de nuit, 💡 Lampes de chevet, 🪟 Stores, 🧲 Fer à repasser, 🧵 Étendoir à linge, 🦟 Moustiquaire.
+
+🎬 Divertissement
+🛰️ Connexion Starlink, 📺 Télévision (chaînes + Netflix + jeux vidéos), 📚 Livres, 🧩 Jeux enfants, 🎯 Terrain de boules, 💦 Jeux aquatiques, 🏸 Badminton, 🏀 Panier de basket, 🏊 Piscine, 🥾 Randonnées, 🃏 Jeux pour adultes.
+
+👨‍👩‍👧‍👦 Famille
+👶 Lit pour bébé (Standard 1,3 m x 70 cm), 🧸 Lit parapluie, 🧩 Livres & jouets, 🪑 Chaise haute, 🛡️ Pare-feu poêle, 🧸 Salle de jeux, 🛝 Aire de jeux extérieure, 🚨 Alarme piscine, 💦 Jeux aquatiques, 🐟 Petit bassin.
+
+🔥 Chauffage et climatisation
+🔥 Poêle à bois (en option), 🌀 Ventilateurs portables, 🌡️ Chauffage central.
+
+🧯 Sécurité
+🚨 Détecteur de fumée, ⚠️ Détecteur de CO, 🧯 Extincteur, 🩹 Kit premiers secours, 🧯 Bâches anti-feu.
+
+🍽️ Cuisine et salle à manger
+🍳 Cuisine équipée, 🧊 Réfrigérateur, 📡 Micro-ondes, 🧊 Mini frigo (Chambre VIP), ❄️ Congélateur, 🧼 Lave-vaisselle, 🔥 Cuisinière, ♨️ Four, 🫖 Bouilloire, ☕ Cafetière, ☕ Café, 🍷 Verres à vin, 🍞 Grille-pain, 🍳 Plaque de cuisson, 🧂 Équipements de base (huile, sel, poivre), 🍽️ Vaisselle & couverts, 🍖 Ustensiles barbecue, 🪑 Table à manger.
+
+📍 Emplacement
+🌊 Accès lac/cascades à pied, 🚪 Entrée privée piste en terre, 🧺 Laverie à proximité.
+
+🌿 Extérieur
+🌤️ Patio/balcon, 🌱 Arrière-cour, 🪑 Mobilier extérieur, 🍽️ Espace repas plein air, 🔥 Barbecue électrique, 🧘 Chaises longues.
+
+🚗 Parking et installations
+🅿️ Parking gratuit, 🏊 Piscine privée.
+
+🧾 Services
+🐾 Animaux acceptés (supplément), 🚭 Non fumeur, 📅 Séjours longue durée, 🔑 Clés remises par l'hôte.`}
           </AnnexeBlock>
 
-          {/* SECTION SIGNATURE OTP */}
+          <AnnexeBlock title="Annexe 3 : Règlement Intérieur (Texte Officiel)" defaultOpen={true}>
+{`▶️ Le GPS ne trouvant pas la villa en pleine forêt, nous vous donnons rendez-vous à La Chapelle Notre Dame – 715 Chemin Notre Dame, 83570 Carcès. Merci de nous envoyer un message 30 minutes avant votre arrivée afin qu’une personne vienne vous chercher et vous guide jusqu’à la propriété.
+▶️ Suite à de nombreuses mauvaises expériences, abus, vols et dégradations, nous sommes dans l'obligation de demander la validation de ce règlement avant toute location. Un état des lieux avec signature sera effectué à l’arrivée et au départ afin de prévenir toute disparition ou détérioration :
+⛔️ Fêtes strictement interdites : tout non-respect entraînera une expulsion immédiate via la plateforme ou la police
+‼️ Nombre de personnes limité à 8. Pour toute personne supplémentaire, un supplément de 50 €/personne/nuit sera demandé à l’arrivée ainsi que 50 €/personne supplémentaire en journée (même si elle ne dort pas sur place)
+🚻 Personnes non déclarées interdites : toute personne supplémentaire doit être signalée avant la location
+🎦 Caméras de surveillance sur l’accès afin d’éviter tout abus
+🚼 Les personnes supplémentaires doivent apporter leur propre matelas gonflable et literie.
+❌ Les canapés ne sont pas convertibles : il est interdit d’y dormir
+🛏️ Merci de NE PAS enlever la literie des lits avant votre départ. Toute disparition sera facturée en raison des nombreux vols constatés
+❌ Ne pas retirer les tapis noir du four pendant les cuissons, ne pas les jeter.
+🚭 Non-fumeurs à l’intérieur : merci d’utiliser un cendrier en extérieur et de ne jeter aucun mégot au sol (risque d’incendie élevé et non-respect du lieu naturel)
+🚮 Poubelles : à emporter à votre départ
+🍽️ Vaisselle : à placer dans le lave-vaisselle avant de partir (ne pas laisser dans l’évier)
+✅ Linge fourni : literies, couvertures supplémentaires et serviettes de douche (grandes et petites). Literie bébé non fournis. Serviettes de piscine non fournies
+📛 Zones privées interdites : toute zone non visitée avec la propriétaire est strictement interdite d’accès dont l’enclos des chats.
+🏊‍♀️ Accès interdit au local technique de la piscine. Ne pas manipuler la pompe ni les vannes. Un tuyau est à disposition pour compenser l’évaporation de l’eau en été
+❌ Ne pas démonter ni ouvrir ni arracher l’alarme de la piscine : un règlement est fourni sur la porte du local technique pour son utilisation.
+🔥 Sécurité incendie : feux d’artifice, pétards et fumigènes interdits
+🍗 Barbecue autorisé sauf par vent fort : charbon non fourni. Merci de laisser le barbecue propre et de vider les cendres froides dans un sac poubelle (ne pas jeter dans le jardin).
+🐶 Animaux acceptés avec supplément de 10 euros par chien et par nuit à payer à votre arrivée
+✅ Produits fournis : savon, shampoing, cafetière à filtre (café moulu), filtres, éponge, torchon, produits ménagers, papier toilette, sel, poivre, sucre, produit vaisselle, pastilles lave-vaisselle, sopalin
+🚰 Prévoir des packs d’eau potable (eau du forage). 🫧 Lessive non fournie
+🕯️ Poêle à bois en option : 40 € (1/4 de stère + sac bois d’allumage + allume-feu). À réserver avant l’arrivée.
+🛣️ Route d’accès : piste en terre sur 2 minutes, déconseillée aux voitures très basses.
+📍 Arrivée entre 16h et 18h (possibilité en début de journée avec supplément de 70 €, selon disponibilités).
+📍 Départ à 10h maximum avec check-out obligatoire. La maison doit être libre et vide des locataires et de leurs bagages à 10h au plus tard par respect pour les arrivants. Si vous souhaitez partir plus tôt, nous viendrons vérifier la maison. Départ en fin de journée possible avec supplément de 70 € (selon disponibilités).`}
+          </AnnexeBlock>
+
+          {/* SIGNATURE ÉLECTRONIQUE OTP */}
           <section className="mt-12 border-t-4 border-[#06243D] pt-10 text-slate-900">
             <h2 className="text-xl font-black uppercase mb-6">Signature Électronique Sécurisée</h2>
             
             <div className="space-y-4 mb-8">
-              <label className="flex items-start gap-3 text-sm font-bold">
+              <label className="flex items-start gap-3 text-sm font-bold cursor-pointer">
                 <input type="checkbox" className="h-5 w-5 mt-1" checked={acceptedTerms} onChange={e => setAcceptedTerms(e.target.checked)} disabled={isSigned} />
                 <span>J'accepte l'intégralité du contrat et du règlement intérieur (Annexe 3).</span>
               </label>
-              <label className="flex items-start gap-3 text-sm font-bold">
+              <label className="flex items-start gap-3 text-sm font-bold cursor-pointer">
                 <input type="checkbox" className="h-5 w-5 mt-1" checked={certifiedInsurance} onChange={e => setCertifiedInsurance(e.target.checked)} disabled={isSigned} />
                 <span>Je certifie être couvert par une assurance responsabilité civile villégiature (Article 17).</span>
               </label>
@@ -233,13 +335,13 @@ export default function ContractClient({ booking, token, existing }: Props) {
 
             <div className="bg-slate-50 p-6 rounded-xl border-2 border-dashed border-slate-200 mb-8">
               <h3 className="font-bold mb-2">Pourquoi un code de signature ?</h3>
-              <p className="text-sm text-slate-600">Pour garantir que la personne qui signe est bien celle qui a effectué la demande, nous envoyons un <strong>code unique à 6 chiffres</strong> par email. Cela sécurise juridiquement votre signature.</p>
+              <p className="text-sm text-slate-600">Pour garantir l'identité du signataire, nous envoyons un <strong>code unique à 6 chiffres</strong> par email. Cela sécurise juridiquement votre engagement.</p>
             </div>
 
             <div className="flex flex-col gap-6">
               <div className="flex items-center gap-4 font-bold">
                 <span>Fait à Carcès, le :</span>
-                <input type="text" placeholder="JJ/MM/AAAA" className="border p-2 w-40" value={contractDate} onChange={e => setContractDate(e.target.value)} disabled={isSigned} />
+                <input type="text" placeholder="JJ/MM/AAAA" className="border p-2 w-40 bg-white" value={contractDate} onChange={e => setContractDate(e.target.value)} disabled={isSigned} />
               </div>
 
               {!isSigned && (
