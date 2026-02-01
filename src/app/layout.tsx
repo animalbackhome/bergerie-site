@@ -12,18 +12,17 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-// CONFIGURATION SEO POUR SE DÉMARQUER
 export const metadata: Metadata = {
-  // On dit à Google où est le site principal
   metadataBase: new URL('https://superbe-bergerie-foret-piscine-lac.com'),
   
-  // TON TITRE EXACT + Emojis pour attirer l'oeil
+  // TA VALIDATION GOOGLE (C'est la ligne magique)
+  verification: {
+    google: 'Eu_G0T3L0kvNtJcJg7bxU8GoHaxVdqIBtQpB35vpGvo',
+  },
+
   title: "✅ Site Officiel entre particuliers sans commissions | Bergerie Piscine & Lac",
-  
-  // DESCRIPTION VENDEUSE + Emojis
   description: "🚫 Zéro frais de plateforme. Réservez en direct au meilleur prix. 🌿 Superbe bergerie 215m² isolée en forêt, 💦 piscine privée au sel, accès direct lac et cascades. Calme absolu.",
   
-  // Configuration de l'image qui apparaîtra sur Google et Facebook
   openGraph: {
     title: "✅ Site Officiel : Bergerie sans commissions (Piscine & Lac)",
     description: "Économisez en réservant en direct. Villa de rêve isolée en Provence Verte.",
@@ -33,15 +32,41 @@ export const metadata: Metadata = {
     type: 'website',
     images: [
       {
-        // --- REMPLACE CE NOM PAR CELUI DE TA MEILLEURE PHOTO DANS LE DOSSIER PUBLIC ---
-        url: '/nom-de-ta-meilleure-photo.jpg', 
-        width: 1200, // Laisse ces dimensions, c'est le standard Google
+        url: '/nom-de-ta-meilleure-photo.jpg', // VERIFIE QUE C'EST LE BON NOM ICI
+        width: 1200,
         height: 630,
         alt: 'Vue sublime de la bergerie en pierre avec piscine privée et forêt',
       },
     ],
   },
 };
+
+// DONNÉES STRUCTURÉES (INVISIBLE)
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'VacationRental',
+  name: 'Superbe Bergerie Forêt Piscine Lac',
+  description: 'Bergerie provençale en pleine nature à Carcès avec piscine privée et accès lac.',
+  url: 'https://superbe-bergerie-foret-piscine-lac.com',
+  address: {
+    '@type': 'PostalAddress',
+    addressLocality: 'Carcès',
+    addressRegion: 'Var',
+    postalCode: '83570',
+    addressCountry: 'FR'
+  },
+  geo: {
+    '@type': 'GeoCoordinates',
+    latitude: 43.476, 
+    longitude: 6.182
+  },
+  amenityFeature: [
+    { '@type': 'LocationFeatureSpecification', name: 'Piscine Privée', value: true },
+    { '@type': 'LocationFeatureSpecification', name: 'Accès Lac', value: true },
+    { '@type': 'LocationFeatureSpecification', name: 'Forêt', value: true },
+    { '@type': 'LocationFeatureSpecification', name: 'Climatisation', value: true }
+  ]
+}
 
 export default function RootLayout({
   children,
@@ -53,6 +78,10 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
         {children}
       </body>
     </html>
