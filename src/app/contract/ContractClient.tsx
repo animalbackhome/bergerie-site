@@ -59,6 +59,14 @@ function AnnexeBlock({ title, children, defaultOpen = false }: { title: string, 
   );
 }
 
+// INFO RIB POUR LE POPUP (Doit correspondre à l'API)
+const RIB_INFO = {
+  banque: "Revolut",
+  titulaire: "Coralie Laurens",
+  iban: "FR76 2823 3000 0105 5571 3835 979",
+  bic: "REVOFRP2"
+};
+
 export default function ContractClient({ booking, token, existing }: Props) {
   const OWNER = {
     name: "Laurens Coralie",
@@ -76,10 +84,16 @@ export default function ContractClient({ booking, token, existing }: Props) {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [certifiedInsurance, setCertifiedInsurance] = useState(false);
 
+  // ÉTATS POUR LES POP-UPS
+  const [showCodeSentModal, setShowCodeSentModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [paymentChecked, setPaymentChecked] = useState(false);
+
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // On n'utilise plus okMsg simple car on a les modales maintenant
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
   const isSigned = Boolean(existing?.signed_at);
@@ -140,10 +154,10 @@ export default function ContractClient({ booking, token, existing }: Props) {
       
       if (action === 'send_otp') { 
         setOtpSent(true); 
-        setOkMsg("Code envoyé par email ✅"); 
+        setShowCodeSentModal(true); // AFFICHE LE POPUP CODE ENVOYÉ
       } else { 
-        setOkMsg("Contrat signé avec succès ! Redirection...");
-        window.location.reload(); 
+        // AFFICHE LE POPUP SUCCÈS / PAIEMENT
+        setShowSuccessModal(true);
       }
     } catch (e: any) { 
         setError(e.message); 
@@ -152,8 +166,30 @@ export default function ContractClient({ booking, token, existing }: Props) {
     }
   };
 
+  // NOUVELLE FONCTION POUR CONFIRMER LE VIREMENT
+  const handlePaymentConfirm = async () => {
+    if (!paymentChecked) return;
+    setLoading(true);
+    try {
+        await fetch("/api/contract", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                action: 'payment_alert', 
+                rid: booking.id, 
+                montant: pricingData.acompte
+            })
+        });
+        // Une fois l'alerte envoyée, on recharge pour afficher le contrat signé
+        window.location.reload();
+    } catch (e) {
+        console.error(e);
+        window.location.reload(); // On recharge quand même car le contrat est signé
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 pb-20 font-sans text-slate-900">
+    <div className="min-h-screen bg-slate-950 pb-20 font-sans text-slate-900 relative">
       <div className="bg-gradient-to-r from-[#06243D] via-[#053A63] to-[#0B2A7A] py-10 text-white">
         <div className="mx-auto max-w-6xl px-6">
           <p className="text-sm opacity-80 uppercase tracking-widest">Superbe Bergerie • Contrat officiel</p>
@@ -442,6 +478,11 @@ Les équipements listés ci-dessous sont disponibles sur place (selon l’organi
                   )}
                 </>
               )}
+              {isSigned && (
+                 <div className="text-center font-bold text-emerald-600 p-3 bg-emerald-50 border border-emerald-100 rounded-lg">
+                    Contrat signé le {new Date(existing?.signed_at!).toLocaleDateString('fr-FR')} ✅
+                 </div>
+              )}
             </div>
             {error && <p className="mt-4 text-center font-bold text-red-600 p-3 bg-red-50 border border-red-100 rounded-lg">{error}</p>}
             {okMsg && <p className="mt-4 text-center font-bold text-emerald-600 p-3 bg-emerald-50 border border-emerald-100 rounded-lg">{okMsg}</p>}
@@ -449,6 +490,94 @@ Les équipements listés ci-dessous sont disponibles sur place (selon l’organi
 
         </div>
       </div>
+
+      {/* --- POP-UP 1 : DEMANDE DE CODE ENVOYÉE --- */}
+      {showCodeSentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md animate-in fade-in zoom-in-95 duration-200 overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="border-b bg-green-50 px-6 py-4 flex justify-between items-center">
+              <h3 className="text-lg font-bold text-green-700 flex items-center gap-2">
+                Demande envoyée ✅
+              </h3>
+              <button onClick={() => setShowCodeSentModal(false)} className="text-gray-400 hover:text-gray-600 text-2xl font-bold">×</button>
+            </div>
+            
+            <div className="p-6 space-y-4 text-gray-700">
+              <p>Merci, votre demande de code a bien été envoyée.</p>
+              <p>Vous recevrez votre code par e-mail dans les plus brefs délais.</p>
+              
+              <div className="rounded-lg bg-red-50 border border-red-100 p-4">
+                <p className="font-bold text-red-700 text-sm">
+                  Important : si vous ne voyez pas notre message, merci de vérifier votre dossier Courrier indésirable / Spam ainsi que l’onglet Promotions (Gmail).
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 px-6 py-4">
+              <button 
+                onClick={() => setShowCodeSentModal(false)}
+                className="w-full rounded-lg bg-[#06243D] py-3 font-bold text-white hover:bg-black transition-all"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- POP-UP 2 : CONTRAT SIGNÉ & PAIEMENT --- */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-lg animate-in fade-in zoom-in-95 duration-200 overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="bg-green-600 px-6 py-6 text-center text-white">
+              <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-white text-2xl">✅</div>
+              <h3 className="text-xl font-bold">Contrat signé avec succès !</h3>
+            </div>
+            
+            <div className="p-6">
+              <p className="text-center text-gray-600 mb-6">
+                Votre contrat est bien signé, le propriétaire va le recevoir dans les plus brefs délais et vous le renverra contresigné si toutes les informations sont correctes.
+              </p>
+              
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-5 mb-6">
+                <h4 className="mb-2 text-center font-bold text-blue-900">Règlement de l'acompte (30%)</h4>
+                <p className="mb-4 text-center text-sm text-blue-700">Pour valider définitivement la réservation :</p>
+                <div className="mb-4 text-center text-3xl font-black text-blue-900">{toMoneyEUR(pricingData.acompte)}</div>
+                
+                <div className="rounded border border-blue-200 bg-white p-3 font-mono text-sm text-gray-700 shadow-sm">
+                  <p><strong>Banque :</strong> {RIB_INFO.banque}</p>
+                  <p><strong>Titulaire :</strong> {RIB_INFO.titulaire}</p>
+                  <p><strong>IBAN :</strong> {RIB_INFO.iban}</p>
+                  <p><strong>BIC :</strong> {RIB_INFO.bic}</p>
+                </div>
+              </div>
+
+              <div className="mb-6 flex items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 cursor-pointer hover:bg-gray-100 transition" onClick={() => setPaymentChecked(!paymentChecked)}>
+                <input 
+                  type="checkbox" 
+                  checked={paymentChecked}
+                  onChange={(e) => setPaymentChecked(e.target.checked)}
+                  className="h-6 w-6 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                <label className="font-bold text-gray-800 cursor-pointer select-none">
+                  Virement de 30% effectué
+                </label>
+              </div>
+
+              <button 
+                onClick={handlePaymentConfirm}
+                disabled={!paymentChecked || loading}
+                className={`w-full rounded-lg py-4 font-black uppercase text-white shadow-lg transition-all ${
+                  paymentChecked ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-300 cursor-not-allowed'
+                }`}
+              >
+                {loading ? "Validation..." : "VALIDER LE PAIEMENT"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
